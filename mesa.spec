@@ -69,7 +69,7 @@ Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
 
-BuildRequires:  meson >= 1.5.0
+BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
 BuildRequires:  gettext
