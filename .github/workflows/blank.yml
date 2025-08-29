@@ -2,7 +2,7 @@ name: Update Mesa.spec
 
 on:
   schedule:
-    - cron: "*/40 * * * *" # Запуск каждые 5 часа
+    - cron: "*/40 */3 * * *" # Запуск каждые 5 часа
    
   workflow_dispatch: # Ручной запуск
 
