@@ -78,6 +78,9 @@ enabled=1
 gpgcheck=1
 gpgkey=https://download.fedoraproject.org/pub/fedora/linux/keys/RPM-GPG-KEY-fedora-$releasever-$basearch
 EOF  
+%autosetup -n mesa-%{commit} -p1
+cp %{SOURCE1} docs/
+
 
 
 BuildRequires:  meson >= 1.7.0
@@ -326,10 +329,6 @@ Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{rel
 Mesa development and debugging tools. Includes tools for debugging
 drivers, inspecting GPU state, compiler tools, and more.
 %endif
-
-%prep
-%autosetup -n mesa-%{commit} -p1
-cp %{SOURCE1} docs/
 
 %build
 # Ensure standard Rust compiler flags are set
