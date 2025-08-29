@@ -351,6 +351,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 
 %meson \
   -Dplatforms=x11,wayland \
+   --wrap-mode=default \
   -Dgallium-drivers=softpipe,llvmpipe,virgl%{?with_d3d12:,d3d12},nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
   -Dgallium-d3d12-video=enabled \
   -Dgallium-d3d12-graphics=enabled \
