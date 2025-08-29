@@ -439,15 +439,6 @@ popd
 %{_includedir}/gbm.h
 %{_libdir}/pkgconfig/gbm.pc
 
-%if 0%{?with_opencl}
-%files libOpenCL
-%{_libdir}/libRusticlOpenCL.so.*
-%{_sysconfdir}/OpenCL/vendors/rusticl.icd
-
-%files libOpenCL-devel
-%{_libdir}/libRusticlOpenCL.so
-%endif
-
 %files dri-drivers
 %{_datadir}/drirc.d/00-mesa-defaults.conf
 %{_libdir}/libgallium-*.so
@@ -478,6 +469,7 @@ popd
 %if 0%{?with_vulkan_hw}
 %{_libdir}/dri/zink_dri.so
 %endif
+
 
 %if 0%{?with_va}
 %files va-drivers
@@ -553,6 +545,10 @@ popd
 %if 0%{?with_mesa_tools}
 %files tools
 %{_bindir}/glsl_compiler
+
+/usr/bin/executor
+/usr/lib/debug/usr/bin/executor-*.debug
+
 %{_bindir}/spirv2nir
 %{_bindir}/mesa-screenshot-control.py
 %{_bindir}/intel_measure.py
@@ -572,7 +568,6 @@ popd
 %{_bindir}/intel_monitor
 %{_bindir}/intel_sanitize_gpu
 %{_bindir}/intel_stub_gpu
-%{_bindir}/executor
 /usr/libexec/libintel_dump_gpu.so
 /usr/libexec/libintel_sanitize_gpu.so
 %{_libdir}/libamdgpu_noop_drm_shim.so
@@ -583,4 +578,5 @@ popd
 %{_bindir}/nv_mme_dump
 %{_bindir}/nv_push_dump
 %endif
+
 
