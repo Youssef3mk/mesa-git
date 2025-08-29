@@ -1,4 +1,4 @@
-%bcond_without videocodecs
+# mesa.spec
 %global source_date_epoch_from_changelog 0
 
 # Since we're only building for x86_64 and i386, we can simplify these conditionals
@@ -65,11 +65,6 @@ License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-
-# src/gallium/auxiliary/postprocess/pp_mlaa* have an ... interestingly worded license.
-# Source1 contains email correspondence clarifying the license terms.
-# Fedora opts to ignore the optional part of clause 2 and treat that code as 2 clause BSD.
-
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
@@ -81,9 +76,6 @@ BuildRequires:  gettext
 %if 0%{?with_hardware}
 BuildRequires:  kernel-headers
 %endif
-# We only check for the minimum version of pkgconfig(libdrm) needed so that the
-# SRPMs for each arch still have the same build dependencies. See:
-# https://bugzilla.redhat.com/show_bug.cgi?id=1859515
 BuildRequires:  pkgconfig(libdrm) >= 2.4.97
 %if 0%{?with_libunwind}
 BuildRequires:  pkgconfig(libunwind)
@@ -144,14 +136,12 @@ BuildRequires:  rustfmt
 %endif
 %if 0%{?with_nvk}
 BuildRequires:  cbindgen
-BuildRequires:  (crate(paste) >= 1.0.14 with crate(paste) < 2)
+BuildRequires:  (crate(paste/default) >= 1.0.14 with crate(paste/default) < 2)
 BuildRequires:  (crate(proc-macro2) >= 1.0.56 with crate(proc-macro2) < 2)
 BuildRequires:  (crate(quote) >= 1.0.25 with crate(quote) < 2)
-# Don't specify crate version for rustc-hash to avoid dependency resolution issues
-# Just use the system's rust-rustc-hash-devel package
-BuildRequires:  rust-rustc-hash-devel
 BuildRequires:  (crate(syn/clone-impls) >= 2.0.15 with crate(syn/clone-impls) < 3)
 BuildRequires:  (crate(unicode-ident) >= 1.0.6 with crate(unicode-ident) < 2)
+BuildRequires:  (crate(rustc-hash) >= 2.0.0 with crate(rustc-hash) < 3)
 %endif
 %if %{with valgrind}
 BuildRequires:  pkgconfig(valgrind)
@@ -165,18 +155,11 @@ BuildRequires:  python3-pycparser
 BuildRequires:  python3-pyyaml
 BuildRequires:  vulkan-headers
 BuildRequires:  glslang
-# Required for vulkan screenshot layer
 BuildRequires:  pkgconfig(libpng)
-# Required for intel UI tools
 BuildRequires:  pkgconfig(epoxy)
 BuildRequires:  pkgconfig(gtk+-3.0)
 %if 0%{?with_vulkan_hw}
 BuildRequires:  pkgconfig(vulkan)
-%endif
-
-## vulkan hud requires
-%if 0%{?with_vulkan_overlay}
-BuildRequires: glslang
 %endif
 
 %description
@@ -217,7 +200,6 @@ Requires:       %{name}-libgbm%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release
 Recommends:     %{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 Obsoletes:      libOSMesa < %{?epoch:%{epoch}:}%{version}-%{release}
 
-
 %description libEGL
 %{summary}.
 
@@ -244,7 +226,7 @@ Recommends:     %{name}-va-drivers%{?_isa}
 %{summary}.
 
 %if 0%{?with_va}
-%package        va-drivers
+%package va-drivers
 Summary:        Mesa-based VA-API video acceleration drivers
 Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 Obsoletes:      %{name}-vaapi-drivers < 22.3.0-0.24
@@ -254,7 +236,7 @@ Obsoletes:      %{name}-vaapi-drivers < 22.3.0-0.24
 %endif
 
 %if 0%{?with_vdpau}
-%package        vdpau-drivers
+%package vdpau-drivers
 Summary:        Mesa-based VDPAU drivers
 Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 
@@ -267,9 +249,6 @@ Summary:        Mesa gbm runtime library
 Provides:       libgbm
 Provides:       libgbm%{?_isa}
 Recommends:     %{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-# If mesa-dri-drivers are installed, they must match in version. This is here to prevent using
-# older mesa-dri-drivers together with a newer mesa-libgbm and its dependants.
-# See https://bugzilla.redhat.com/show_bug.cgi?id=2193135 .
 Requires:       (%{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release} if %{name}-dri-drivers%{?_isa})
 
 %description libgbm
@@ -327,42 +306,53 @@ drivers, inspecting GPU state, compiler tools, and more.
 cp %{SOURCE1} docs/
 
 %build
-# ensure standard Rust compiler flags are set
+# Ensure standard Rust compiler flags are set
 export RUSTFLAGS="%build_rustflags"
 
 %if 0%{?with_nvk}
 export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
-# So... Meson can't actually find them without tweaks
-%define inst_crate_nameversion() %(basename %{cargo_registry}/%{1}-*)
-%define rewrite_wrap_file() sed -e "/source.*/d" -e "s/%{1}-.*/%{inst_crate_nameversion %{1}}/" -i subprojects/%{1}.wrap
 
+%define inst_crate_nameversion() %( \
+  found_dir=$(find %{cargo_registry} -maxdepth 1 -type d -name '%{1}-*' 2>/dev/null | head -n1); \
+  if [ -n "$found_dir" ]; then basename "$found_dir"; fi \
+)
+
+%define rewrite_wrap_file() \
+  wrapfile=$(find subprojects -maxdepth 1 -name '%{1}*.wrap' | head -n1) && \
+  if [ -z "$wrapfile" ]; then \
+    echo "ERROR: .wrap file not found for crate %{1}" >&2; exit 1; \
+  fi && \
+  crate_dir="%{expand:%%inst_crate_nameversion %{1}}" && \
+  if [ -z "$crate_dir" ]; then \
+    echo "ERROR: Crate directory not found in %{cargo_registry} for %{1}" >&2; exit 1; \
+  fi && \
+  echo "→ Rewriting $wrapfile to use directory = $crate_dir" && \
+  sed -i -e '/^source_/d' -e "s|^directory = .*|directory = ${crate_dir}|" "$wrapfile"
+
+%rewrite_wrap_file paste
 %rewrite_wrap_file proc-macro2
 %rewrite_wrap_file quote
 %rewrite_wrap_file syn
 %rewrite_wrap_file unicode-ident
-%rewrite_wrap_file paste
 %rewrite_wrap_file rustc-hash
 %endif
 
-# We've gotten a report that enabling LTO for mesa breaks some games. See
-# https://bugzilla.redhat.com/show_bug.cgi?id=1862771 for details.
-# Disable LTO for now
+# Disable LTO to avoid potential issues
 %define _lto_cflags %{nil}
 
 %meson \
   -Dplatforms=x11,wayland \
   -Dgallium-drivers=softpipe,llvmpipe,virgl%{?with_d3d12:,d3d12},nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
   -Dgallium-d3d12-video=enabled \
+   -Dandroid-libbacktrace=disabled \
   -Dgallium-d3d12-graphics=enabled \
   -Damdgpu-virtio=true \
   -Dgallium-vdpau=%{?with_vdpau:enabled}%{!?with_vdpau:disabled} \
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
-%if 0%{?with_opencl}
-  -Dgallium-rusticl=true \
-%endif
+  -Dgallium-rusticl=%{?with_opencl:true}%{!?with_opencl:false} \
   -Dgallium-mediafoundation=disabled \
   -Dgallium-extra-hud=%{?with_gallium_extra_hud:true}%{!?with_gallium_extra_hud:false} \
-  -Dvulkan-drivers=%{?vulkan_drivers} \
+  -Dvulkan-drivers=%{vulkan_drivers} \
   -Dvulkan-layers=intel-nullhw,device-select,overlay,screenshot,vram-report-limit \
   -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
   -Dgpuvis=%{?with_gpuvis:true}%{!?with_gpuvis:false} \
@@ -378,27 +368,18 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dglx=dri \
   -Degl=enabled \
   -Dglvnd=enabled \
-%if 0%{?with_intel_clc}
-  -Dintel-clc=enabled \
-%endif
   -Dintel-rt=%{?with_intel_vk_rt:enabled}%{!?with_intel_vk_rt:disabled} \
   -Dmicrosoft-clc=enabled \
   -Dllvm=enabled \
   -Dshared-llvm=enabled \
   -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
+  -Dvideo-codecs=all \
 %if !0%{?with_libunwind}
   -Dlibunwind=disabled \
 %endif
 %if !0%{?with_lmsensors}
   -Dlmsensors=disabled \
-%endif
-  -Dandroid-libbacktrace=disabled \
-%ifarch %{ix86}
-  -Dglx-read-only-text=true \
-%endif
-%if %{with videocodecs}
-  -Dvideo-codecs=all \
 %endif
   %{nil}
 %meson_build
@@ -406,21 +387,19 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 %install
 %meson_install
 
-# libvdpau opens the versioned name, don't bother including the unversioned
+# Remove unversioned libraries
 rm -vf %{buildroot}%{_libdir}/vdpau/*.so
-# likewise glvnd
 rm -vf %{buildroot}%{_libdir}/libGLX_mesa.so
 rm -vf %{buildroot}%{_libdir}/libEGL_mesa.so
-# XXX can we just not build this
 rm -vf %{buildroot}%{_libdir}/libGLES*
 
-# glvnd needs a default provider for indirect rendering where it cannot
-# determine the vendor
+# glvnd needs a default provider for indirect rendering
 ln -s %{_libdir}/libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 
-# this keeps breaking, check it early.  note that the exit from eu-ftr is odd.
+# Check for text relocations
 pushd %{buildroot}%{_libdir}
 for i in libGL*.so ; do
+    sleep 1
     eu-findtextrel $i && exit 1
 done
 popd
@@ -433,6 +412,7 @@ popd
 %files libGL
 %{_libdir}/libGLX_mesa.so.0*
 %{_libdir}/libGLX_system.so.0*
+
 %files libGL-devel
 %dir %{_includedir}/GL
 %dir %{_includedir}/GL/internal
@@ -442,18 +422,21 @@ popd
 %files libEGL
 %{_datadir}/glvnd/egl_vendor.d/50_mesa.json
 %{_libdir}/libEGL_mesa.so.0*
+
 %files libEGL-devel
 %dir %{_includedir}/EGL
 %{_includedir}/EGL/eglext_angle.h
 %{_includedir}/EGL/eglmesaext.h
 
 %files libgbm
+%{_libdir}/gbm/dri_gbm.so
 %{_libdir}/libgbm.so.1
 %{_libdir}/libgbm.so.1.*
+%{_includedir}/gbm_backend_abi.h
+
 %files libgbm-devel
 %{_libdir}/libgbm.so
 %{_includedir}/gbm.h
-%{_includedir}/gbm_backend_abi.h
 %{_libdir}/pkgconfig/gbm.pc
 
 %if 0%{?with_opencl}
@@ -473,11 +456,9 @@ popd
 %{_libdir}/dri/libdril_dri.so
 %{_libdir}/dri/swrast_dri.so
 %{_libdir}/dri/virtio_gpu_dri.so
-# apple_dri.so doesn't exist in the build - removing
 %if 0%{?with_d3d12}
 %{_libdir}/dri/d3d12_dri.so
 %endif
-
 %if 0%{?with_r300}
 %{_libdir}/dri/r300_dri.so
 %endif
@@ -563,7 +544,6 @@ popd
 %{_libdir}/libvulkan_intel_hasvk.so
 %{_datadir}/vulkan/icd.d/intel_hasvk_icd.*.json
 %endif
-
 %if 0%{?with_vulkan_overlay}
 %{_bindir}/mesa-overlay-control.py
 %{_libdir}/libVkLayer_MESA_overlay.so
@@ -572,13 +552,10 @@ popd
 
 %if 0%{?with_mesa_tools}
 %files tools
-# General development tools
 %{_bindir}/glsl_compiler
 %{_bindir}/spirv2nir
 %{_bindir}/mesa-screenshot-control.py
 %{_bindir}/intel_measure.py
-
-# Intel tools
 %{_bindir}/aubinator
 %{_bindir}/aubinator_error_decode
 %{_bindir}/aubinator_viewer
@@ -597,17 +574,12 @@ popd
 %{_bindir}/intel_stub_gpu
 /usr/libexec/libintel_dump_gpu.so
 /usr/libexec/libintel_sanitize_gpu.so
-
-# DRM shim libraries
 %{_libdir}/libamdgpu_noop_drm_shim.so
 %{_libdir}/libdlclose-skip.so
 %{_libdir}/libintel_noop_drm_shim.so
 %{_libdir}/libnouveau_noop_drm_shim.so
 %{_libdir}/libradeon_noop_drm_shim.so
-
-# Nouveau tools
 %{_bindir}/nv_mme_dump
 %{_bindir}/nv_push_dump
 %endif
 
-%changelog
