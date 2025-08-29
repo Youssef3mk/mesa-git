@@ -304,6 +304,19 @@ Obsoletes:      mesa-vulkan-devel < %{?epoch:%{epoch}:}%{version}-%{release}
 %description vulkan-drivers
 The drivers with support for the Vulkan API.
 
+%package libdisplay-info
+Summary:        Display information library for Mesa
+Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
+%description libdisplay-info
+Library for parsing EDID and other display-related information.
+
+%package libdisplay-info-devel
+Summary:        Development files for libdisplay-info
+Requires:       %{name}-libdisplay-info%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
+%description libdisplay-info-devel
+Development files for the libdisplay-info library.
+
+
 %if 0%{?with_mesa_tools}
 %package tools
 Summary:        Mesa development and debugging tools
@@ -357,6 +370,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dplatforms=x11,wayland \
   -Dgallium-drivers=softpipe,llvmpipe,virgl%{?with_d3d12:,d3d12},nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
   -Dgallium-d3d12-video=enabled \
+   --wrap-mode=default \
    -Dandroid-libbacktrace=disabled \
   -Dgallium-d3d12-graphics=enabled \
   -Damdgpu-virtio=true \
@@ -388,30 +402,39 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
   -Dvideo-codecs=all \
+ 
 %if !0%{?with_libunwind}
   -Dlibunwind=disabled \
 %endif
 %if !0%{?with_lmsensors}
   -Dlmsensors=disabled \
 %endif
+
+%ifarch %{ix86}
+  -Dglx-read-only-text=true \
+%endif
+
   %{nil}
 %meson_build
+
 %install
 %meson_install
 
-# Remove unversioned libraries
+# libvdpau opens the versioned name, don't bother including the unversioned
 rm -vf %{buildroot}%{_libdir}/vdpau/*.so
+# likewise glvnd
 rm -vf %{buildroot}%{_libdir}/libGLX_mesa.so
 rm -vf %{buildroot}%{_libdir}/libEGL_mesa.so
+# XXX can we just not build this
 rm -vf %{buildroot}%{_libdir}/libGLES*
 
-# glvnd needs a default provider for indirect rendering
-ln -s %{_libdir}/libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
+# glvnd needs a default provider for indirect rendering where it cannot
+# determine the vendor
+ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 
-# Check for text relocations
+# this keeps breaking, check it early.  note that the exit from eu-ftr is odd.
 pushd %{buildroot}%{_libdir}
 for i in libGL*.so ; do
-    sleep 1
     eu-findtextrel $i && exit 1
 done
 popd
@@ -424,7 +447,6 @@ popd
 %files libGL
 %{_libdir}/libGLX_mesa.so.0*
 %{_libdir}/libGLX_system.so.0*
-
 %files libGL-devel
 %dir %{_includedir}/GL
 %dir %{_includedir}/GL/internal
@@ -434,22 +456,28 @@ popd
 %files libEGL
 %{_datadir}/glvnd/egl_vendor.d/50_mesa.json
 %{_libdir}/libEGL_mesa.so.0*
-
 %files libEGL-devel
 %dir %{_includedir}/EGL
 %{_includedir}/EGL/eglext_angle.h
 %{_includedir}/EGL/eglmesaext.h
 
 %files libgbm
-%{_libdir}/gbm/dri_gbm.so
 %{_libdir}/libgbm.so.1
 %{_libdir}/libgbm.so.1.*
-%{_includedir}/gbm_backend_abi.h
-
 %files libgbm-devel
 %{_libdir}/libgbm.so
 %{_includedir}/gbm.h
+%{_includedir}/gbm_backend_abi.h
 %{_libdir}/pkgconfig/gbm.pc
+
+%if 0%{?with_opencl}
+%files libOpenCL
+%{_libdir}/libRusticlOpenCL.so.*
+%{_sysconfdir}/OpenCL/vendors/rusticl.icd
+
+%files libOpenCL-devel
+%{_libdir}/libRusticlOpenCL.so
+%endif
 
 %files dri-drivers
 %{_datadir}/drirc.d/00-mesa-defaults.conf
@@ -459,9 +487,11 @@ popd
 %{_libdir}/dri/libdril_dri.so
 %{_libdir}/dri/swrast_dri.so
 %{_libdir}/dri/virtio_gpu_dri.so
+# apple_dri.so doesn't exist in the build - removing
 %if 0%{?with_d3d12}
 %{_libdir}/dri/d3d12_dri.so
 %endif
+
 %if 0%{?with_r300}
 %{_libdir}/dri/r300_dri.so
 %endif
@@ -481,7 +511,6 @@ popd
 %if 0%{?with_vulkan_hw}
 %{_libdir}/dri/zink_dri.so
 %endif
-
 
 %if 0%{?with_va}
 %files va-drivers
@@ -548,6 +577,7 @@ popd
 %{_libdir}/libvulkan_intel_hasvk.so
 %{_datadir}/vulkan/icd.d/intel_hasvk_icd.*.json
 %endif
+
 %if 0%{?with_vulkan_overlay}
 %{_bindir}/mesa-overlay-control.py
 %{_libdir}/libVkLayer_MESA_overlay.so
@@ -556,14 +586,14 @@ popd
 
 %if 0%{?with_mesa_tools}
 %files tools
+# General development tools
 %{_bindir}/glsl_compiler
-
-%{_bindir}/executor
-/usr/lib/debug/usr/bin/executor-*.debug
-
 %{_bindir}/spirv2nir
 %{_bindir}/mesa-screenshot-control.py
 %{_bindir}/intel_measure.py
+%{_bindir}/executor
+
+# Intel tools
 %{_bindir}/aubinator
 %{_bindir}/aubinator_error_decode
 %{_bindir}/aubinator_viewer
@@ -582,11 +612,15 @@ popd
 %{_bindir}/intel_stub_gpu
 /usr/libexec/libintel_dump_gpu.so
 /usr/libexec/libintel_sanitize_gpu.so
+
+# DRM shim libraries
 %{_libdir}/libamdgpu_noop_drm_shim.so
 %{_libdir}/libdlclose-skip.so
 %{_libdir}/libintel_noop_drm_shim.so
 %{_libdir}/libnouveau_noop_drm_shim.so
 %{_libdir}/libradeon_noop_drm_shim.so
+
+# Nouveau tools
 %{_bindir}/nv_mme_dump
 %{_bindir}/nv_push_dump
 %endif
