@@ -68,11 +68,6 @@ Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
-%prep
-# متابعة بقية خطوات %prep عادية
-%autosetup -n mesa-%{commit} -p1
-cp %{SOURCE1} docs/
-
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -320,6 +315,11 @@ Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{rel
 Mesa development and debugging tools. Includes tools for debugging
 drivers, inspecting GPU state, compiler tools, and more.
 %endif
+%prep
+# متابعة بقية خطوات %prep عادية
+%autosetup -n mesa-%{commit} -p1
+cp %{SOURCE1} docs/
+
 
 %build
 # Ensure standard Rust compiler flags are set
