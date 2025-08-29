@@ -1,14 +1,6 @@
 # mesa.spec
 %global source_date_epoch_from_changelog 0
-%prep
-cat > /etc/yum.repos.d/fedora-updates.repo << EOF
-[fedora-updates]
-name=Fedora $releasever - $basearch - Updates
-baseurl=https://download.fedoraproject.org/pub/fedora/linux/updates/$releasever/Everything/$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://download.fedoraproject.org/pub/fedora/linux/keys/RPM-GPG-KEY-fedora-$releasever-$basearch
-EOF
+
 # Since we're only building for x86_64 and i386, we can simplify these conditionals
 %global with_hardware 1
 %global with_radeonsi 1
@@ -76,6 +68,17 @@ Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
+
+%prep
+cat > /etc/yum.repos.d/fedora-updates.repo << EOF
+[fedora-updates]
+name=Fedora $releasever - $basearch - Updates
+baseurl=https://download.fedoraproject.org/pub/fedora/linux/updates/$releasever/Everything/$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://download.fedoraproject.org/pub/fedora/linux/keys/RPM-GPG-KEY-fedora-$releasever-$basearch
+EOF  
+
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
