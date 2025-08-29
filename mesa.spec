@@ -73,6 +73,8 @@ BuildRequires:  meson
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
 BuildRequires:  gettext
+BuildRequires: libdisplay-info-devel
+
 %if 0%{?with_hardware}
 BuildRequires:  kernel-headers
 %endif
