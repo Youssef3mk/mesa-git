@@ -572,6 +572,7 @@ popd
 %{_bindir}/intel_monitor
 %{_bindir}/intel_sanitize_gpu
 %{_bindir}/intel_stub_gpu
+%{_bindir}/executor
 /usr/libexec/libintel_dump_gpu.so
 /usr/libexec/libintel_sanitize_gpu.so
 %{_libdir}/libamdgpu_noop_drm_shim.so
