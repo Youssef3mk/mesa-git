@@ -116,7 +116,7 @@ Source1:        Mesa-MLAA-License-Clarification-Email.txt
 #Patch7:         0001-gallium-Disable-rgb10-configs-by-default.patch
 #Patch1:         001-disable-proc_macro2-unstable-features.patch
 
-BuildRequires:  meson >= 1.3.0
+BuildRequires:  meson >= 1.7.0
 BuildRequires:  cbindgen
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
