@@ -68,19 +68,23 @@ Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
-
 %prep
+# تأكد من إنشاء مجلد yum.repos.d
+mkdir -p /etc/yum.repos.d/
+
+# كتابة ملف repo بشكل صحيح
 cat > /etc/yum.repos.d/fedora-updates.repo << EOF
 [fedora-updates]
-name=Fedora $releasever - $basearch - Updates
+name=Fedora Updates
 baseurl=https://download.fedoraproject.org/pub/fedora/linux/updates/$releasever/Everything/$basearch/
 enabled=1
 gpgcheck=1
 gpgkey=https://download.fedoraproject.org/pub/fedora/linux/keys/RPM-GPG-KEY-fedora-$releasever-$basearch
-EOF  
+EOF
+
+# متابعة بقية خطوات %prep عادية
 %autosetup -n mesa-%{commit} -p1
 cp %{SOURCE1} docs/
-
 
 
 BuildRequires:  meson >= 1.7.0
