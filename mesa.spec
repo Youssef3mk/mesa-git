@@ -352,7 +352,6 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
    -Dandroid-libbacktrace=disabled \
   -Dgallium-d3d12-graphics=enabled \
   -Damdgpu-virtio=true \
-  
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
   -Dgallium-rusticl=%{?with_opencl:true}%{!?with_opencl:false} \
   -Dgallium-mediafoundation=disabled \
