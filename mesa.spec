@@ -306,7 +306,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %endif
 %prep
 # متابعة بقية خطوات %prep عادية
-%autosetup -n mesa-%{commit} -p1
+%autosetup -n linux-mesa-%{commit} -p1
 cp %{SOURCE1} docs/
 
 
