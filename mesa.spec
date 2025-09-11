@@ -64,7 +64,7 @@ Release: 0.585.git%{shortcommit}%{?dist}
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
-Source0:        https://gitlab.com/youssef3k/linux/-/archive/mesa/%{commit}.tar.gz
+Source0:        https://gitlab.com/youssef3k/linux/-/archive/mesa/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
