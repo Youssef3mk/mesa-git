@@ -52,8 +52,9 @@
 %global with_mesa_tools 1
 %global with_xlib_lease 1
 
-%global commit fc0418a69fd7c5d1b6c426314649e7449477c578
-%global shortcommit fc0418a
+%global commit b584b47d0184f4b960962141f604d6a956c948d1
+
+%global shortcommit b584b47
 
 Name:           mesa
 Summary:        Mesa graphics libraries
@@ -63,7 +64,7 @@ Release: 0.585.git%{shortcommit}%{?dist}
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
-Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+Source0:        https://gitlab.com/youssef3k/linux/-/archive/mesa/linux-mesa.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 Patch10:        gnome-shell-glthread-disable.patch
