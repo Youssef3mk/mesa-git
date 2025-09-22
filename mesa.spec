@@ -67,7 +67,7 @@ URL:            http://www.mesa3d.org
 Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
-Patch10:        gnome-shell-glthread-disable.patch
+Patch10:        https://raw.githubusercontent.com/Youssef3mk/mesa-git/refs/heads/main/gnome-shell-glthread-disable.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
