@@ -306,7 +306,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 mv   %{SOURCE0}  mesa 
-%patch0 -p1
+%patch -P 0
 
 
 cp %{SOURCE1} docs/
