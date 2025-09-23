@@ -1,6 +1,6 @@
 # mesa.spec
 %global source_date_epoch_from_changelog 0
-
+%define __spec_install_post %{__os_install_post}
 # Since we're only building for x86_64 and i386, we can simplify these conditionals
 %global with_hardware 1
 %global with_radeonsi 1
@@ -67,7 +67,7 @@ URL:            http://www.mesa3d.org
 Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
-Patch1:        https://raw.githubusercontent.com/Youssef3mk/mesa-git/refs/heads/main/gnome-shell-glthread-disable.patch
+Patch0:       gnome-shell-glthread-disable.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
