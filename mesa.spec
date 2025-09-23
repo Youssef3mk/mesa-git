@@ -306,8 +306,8 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 mv   %{SOURCE0}  mesa.tar.gz 
-%autosetup -n mesa 
-patch -p2 < %{PATCH0}
+%autosetup -n  mesa-%{commit} -p1 
+
 
 
 cp %{SOURCE1} docs/
