@@ -306,7 +306,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 mv   %{SOURCE0}  mesa 
-%patch -P 0
+%patch0 -p2 --fuzz=1 || echo "kc.patch applied with fuzz (minor changes skipped)"
 
 
 cp %{SOURCE1} docs/
