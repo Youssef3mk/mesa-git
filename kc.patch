@@ -1,6 +1,6 @@
-diff -up a/mesa/src/nouveau/vulkan/nvk_cmd_copy.c b/mesa/src/nouveau/vulkan/nvk_cmd_copy.c
---- a/mesa/src/nouveau/vulkan/nvk_cmd_copy.c	2025-09-23 14:06:30.570746765 +0300
-+++ b/mesa/src/nouveau/vulkan/nvk_cmd_copy.c	2025-09-23 14:16:05.833319540 +0300
+diff -up a/src/nouveau/vulkan/nvk_cmd_copy.c b/src/nouveau/vulkan/nvk_cmd_copy.c
+--- a/src/nouveau/vulkan/nvk_cmd_copy.c	2025-09-23 14:06:30.570746765 +0300
++++ b/src/nouveau/vulkan/nvk_cmd_copy.c	2025-09-23 14:16:05.833319540 +0300
 @@ -382,33 +382,26 @@ nvk_CmdCopyBuffer2(VkCommandBuffer comma
        uint64_t dst_addr = vk_buffer_address(&dst->vk, region->dstOffset);
        uint64_t size = region->size;
@@ -135,9 +135,9 @@ diff -up a/mesa/src/nouveau/vulkan/nvk_cmd_copy.c b/mesa/src/nouveau/vulkan/nvk_
  
  VKAPI_ATTR void VKAPI_CALL
  nvk_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
-diff -up a/mesa/src/nouveau/vulkan/nvk_upload_queue.c b/mesa/src/nouveau/vulkan/nvk_upload_queue.c
---- a/mesa/src/nouveau/vulkan/nvk_upload_queue.c	2025-09-23 14:06:40.229462804 +0300
-+++ b/mesa/src/nouveau/vulkan/nvk_upload_queue.c	2025-09-23 14:30:33.722147213 +0300
+diff -up a/src/nouveau/vulkan/nvk_upload_queue.c b/src/nouveau/vulkan/nvk_upload_queue.c
+--- a/src/nouveau/vulkan/nvk_upload_queue.c	2025-09-23 14:06:40.229462804 +0300
++++ b/src/nouveau/vulkan/nvk_upload_queue.c	2025-09-23 14:30:33.722147213 +0300
 @@ -215,57 +215,48 @@ nvk_upload_queue_fill_locked(struct nvk_
     assert(dst_addr % 4 == 0);
     assert(size % 4 == 0);
