@@ -67,7 +67,7 @@ URL:            http://www.mesa3d.org
 Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
-## Patch0:       gnome-shell-glthread-disable.patch
+Patch0:       kc.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -306,8 +306,9 @@ drivers, inspecting GPU state, compiler tools, and more.
 %endif
 %prep
 # متابعة بقية خطوات %prep عادية
-%autosetup -n  mesa-%{commit} -p1
-## %autopatch -p1 -v -M 9
+mv  mesa-%{commit} mesa 
+%autosetup -n mesa  -p1
+ %autopatch -p1 -v -M 9
 
 cp %{SOURCE1} docs/
 
