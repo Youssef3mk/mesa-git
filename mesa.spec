@@ -307,7 +307,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 # متابعة بقية خطوات %prep عادية
 mv   %{SOURCE0}  mesa 
 %autosetup -n mesa 
-%patch0 -p2 --fuzz=1 || echo "kc.patch applied with fuzz (minor changes skipped)"
+%patch 0 -p2 --fuzz=1 || echo "kc.patch applied with fuzz (minor changes skipped)"
 
 
 cp %{SOURCE1} docs/
