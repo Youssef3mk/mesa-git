@@ -307,7 +307,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 # متابعة بقية خطوات %prep عادية
 mv   %{SOURCE0}  mesa 
 %autosetup -n mesa 
-%patch -P2 0
+patch -p2 < %{PATCH0}
 
 
 cp %{SOURCE1} docs/
