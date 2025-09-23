@@ -305,7 +305,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %endif
 %prep
 # متابعة بقية خطوات %prep عادية
-mv   %{SOURCE0}  mesa 
+mv   %{SOURCE0}  mesa.tar.gz 
 %autosetup -n mesa 
 patch -p2 < %{PATCH0}
 
