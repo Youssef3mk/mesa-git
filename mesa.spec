@@ -1,6 +1,5 @@
 # mesa.spec
 %global source_date_epoch_from_changelog 0
-%define __spec_install_post %{__os_install_post}
 # Since we're only building for x86_64 and i386, we can simplify these conditionals
 %global with_hardware 1
 %global with_radeonsi 1
@@ -306,9 +305,9 @@ drivers, inspecting GPU state, compiler tools, and more.
 %endif
 %prep
 # متابعة بقية خطوات %prep عادية
-mv  mesa-%{commit} mesa 
-%autosetup -n mesa  -p1
- %autopatch -p1 -v -M 9
+mv   %{SOURCE0}  mesa 
+%patch0 -p1
+
 
 cp %{SOURCE1} docs/
 
