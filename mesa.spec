@@ -305,8 +305,8 @@ drivers, inspecting GPU state, compiler tools, and more.
 %endif
 %prep
 # متابعة بقية خطوات %prep عادية
-kc.patch -p1 
-%autosetup -n  mesa-%{commit} 
+
+%autosetup -n  mesa-%{commit}  -p1 
 
 
 
