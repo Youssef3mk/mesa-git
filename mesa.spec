@@ -160,7 +160,7 @@ BuildRequires:  pkgconfig(gtk+-3.0)
 %if 0%{?with_vulkan_hw}
 BuildRequires:  pkgconfig(vulkan)
 %endif
-BuildRequires: DirectX-Headers-devel >= 1.618.1
+BuildRequires: cmake git  DirectX-Headers-devel >= 1.618.1
 
 %description
 %{summary}.
