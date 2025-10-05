@@ -560,7 +560,7 @@ popd
 %{_bindir}/spirv2nir
 %{_bindir}/mesa-screenshot-control.py
 %{_bindir}/intel_measure.py
-
+%{_bindir}/mda
 
 # Intel tools
 %{_bindir}/aubinator
