@@ -1,0 +1,1245 @@
+From 50f5ade79671ed6f97c42dba53ccf66ddccd857c Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Tue, 26 Aug 2025 14:46:34 -0400
+Subject: [PATCH REVERT 11/11] nak: Assert that QMDs are big enough
+
+This is a REVERT patch for: nak: Assert that QMDs are big enough
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/compiler/nak/qmd.rs | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/qmd.rs b/src/nouveau/compiler/nak/qmd.rs
+index a84a8ca039f4c..bb3cfb01bac72 100644
+--- a/src/nouveau/compiler/nak/qmd.rs
++++ b/src/nouveau/compiler/nak/qmd.rs
+@@ -67,8 +67,6 @@ macro_rules! qmd_impl_common {
+         }
+ 
+         const GLOBAL_SIZE_LAYOUT: nak_qmd_dispatch_size_layout = {
+-            assert!(paste! {$c::[<$s _MAX_BIT>]} < size_of::<Self>() * 8);
+-
+             let w = paste! {$c::[<$s _CTA_RASTER_WIDTH>]};
+             let h = paste! {$c::[<$s _CTA_RASTER_HEIGHT>]};
+             let d = paste! {$c::[<$s _CTA_RASTER_DEPTH>]};
+-- 
+GitLab
+
+From 0c71f5f1bda45718ee4ba68bd2a5955087e6ebc9 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Tue, 26 Aug 2025 14:46:02 -0400
+Subject: [PATCH REVERT 10/11] nouveau/headers: Add a MAX_BIT for structs
+
+This is a REVERT patch for: nouveau/headers: Add a MAX_BIT for structs
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/headers/struct_parser.py | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/src/nouveau/headers/struct_parser.py b/src/nouveau/headers/struct_parser.py
+index 06e3da184114c..d34baa4510a9f 100644
+--- a/src/nouveau/headers/struct_parser.py
++++ b/src/nouveau/headers/struct_parser.py
+@@ -25,7 +25,6 @@ TEMPLATE_RS = Template("""\
+ use std::ops::Range;
+ 
+ % for s in structs:
+-pub const ${s.name}_MAX_BIT: usize = ${s.max_bit};
+     % for f in s.fields:
+         % if f.stride:
+ #[inline]
+@@ -86,11 +85,9 @@ class Struct(object):
+     def __init__(self, name):
+         self.name = name
+         self.fields = []
+-        self.max_bit = 0
+ 
+     def add_field(self, name, lo, hi, stride=0):
+         self.fields.append(Field(name, lo, hi, stride))
+-        self.max_bit = max(self.max_bit, hi)
+ 
+ DRF_RE = re.compile(r'(?P<hi>[0-9]+):(?P<lo>[0-9]+)')
+ FIELD_NAME_RE = re.compile(r'_?(?P<dw>[0-9]+)?_?(?P<name>.*)')
+-- 
+GitLab
+
+From 00a845a698e3a86b71f0eb7a6ddf1d611826151e Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Mon, 25 Aug 2025 18:10:22 -0400
+Subject: [PATCH REVERT 09/11] nak/qmd: QMD versions 4.0 and 5.0 are both 384B
+
+This is a REVERT patch for: nak/qmd: QMD versions 4.0 and 5.0 are both 384B
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Backport-to: 25.2
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/compiler/nak/qmd.rs | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/qmd.rs b/src/nouveau/compiler/nak/qmd.rs
+index bb3cfb01bac72..bb8d0346f01a0 100644
+--- a/src/nouveau/compiler/nak/qmd.rs
++++ b/src/nouveau/compiler/nak/qmd.rs
+@@ -472,12 +472,12 @@ mod qmd_4_0 {
+ 
+     #[repr(transparent)]
+     pub struct Qmd4_0 {
+-        qmd: [u32; 96],
++        qmd: [u32; 64],
+     }
+ 
+     impl QMD for Qmd4_0 {
+         fn new() -> Self {
+-            let mut qmd = [0; 96];
++            let mut qmd = [0; 64];
+             let mut bv = QMDBitView::new(&mut qmd);
+             qmd_init!(bv, clcbc0, QMDV04_00, 4, 0);
+             Self { qmd }
+@@ -514,12 +514,12 @@ mod qmd_5_0 {
+     }
+ 
+     pub struct Qmd5_0 {
+-        qmd: [u32; 96],
++        qmd: [u32; 64],
+     }
+ 
+     impl QMD for Qmd5_0 {
+         fn new() -> Self {
+-            let mut qmd = [0; 96];
++            let mut qmd = [0; 64];
+             let mut bv = QMDBitView::new(&mut qmd);
+             qmd_init!(bv, clcdc0, QMDV05_00, 5, 0);
+             set_field!(bv, clcdc0, QMDV05_00, QMD_TYPE, 0x2);
+-- 
+GitLab
+
+From 0e268dad00c2538cb5938a28a72b5a920e46c998 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Mon, 25 Aug 2025 17:23:21 -0400
+Subject: [PATCH REVERT 08/11] nvk: Allow for larger QMDs
+
+This is a REVERT patch for: nvk: Allow for larger QMDs
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Backport-to: 25.2
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/vulkan/nvk_cmd_dispatch.c         |  6 +-
+ src/nouveau/vulkan/nvk_cmd_indirect.c         | 58 +++++++++++--------
+ .../vulkan/nvk_indirect_execution_set.c       | 26 +++++---
+ .../vulkan/nvk_indirect_execution_set.h       | 14 +----
+ 4 files changed, 46 insertions(+), 58 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_dispatch.c b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+index 8abbc9112c9c9..e69417c435ab3 100644
+--- a/src/nouveau/vulkan/nvk_cmd_dispatch.c
++++ b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+@@ -163,7 +163,6 @@ nvk_cmd_upload_qmd(struct nvk_cmd_buffer *cmd,
+    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    const uint32_t min_cbuf_alignment = nvk_min_cbuf_alignment(&pdev->info);
+-   const uint32_t qmd_size_B = nak_qmd_size_B(&pdev->info);
+    VkResult result;
+ 
+    /* pre Pascal the constant buffer sizes need to be 0x100 aligned. As we
+@@ -224,9 +223,8 @@ nvk_cmd_upload_qmd(struct nvk_cmd_buffer *cmd,
+          }
+       }
+ 
+-      uint32_t qmd[NAK_MAX_QMD_DWORDS];
+-      assert(qmd_size_B <= sizeof(qmd));
+-      nak_fill_qmd(&pdev->info, &shader->info, &qmd_info, qmd, qmd_size_B);
++      uint32_t qmd[64];
++      nak_fill_qmd(&pdev->info, &shader->info, &qmd_info, qmd, sizeof(qmd));
+ 
+       void *qmd_map;
+       result = nvk_cmd_buffer_alloc_qmd(cmd, sizeof(qmd), 0x100,
+diff --git a/src/nouveau/vulkan/nvk_cmd_indirect.c b/src/nouveau/vulkan/nvk_cmd_indirect.c
+index 3af732c84f990..c3b040021efd0 100644
+--- a/src/nouveau/vulkan/nvk_cmd_indirect.c
++++ b/src/nouveau/vulkan/nvk_cmd_indirect.c
+@@ -224,6 +224,18 @@ nvk_nir_build_pad_NOP(nir_builder *b, struct nvk_nir_push *p, uint32_t nop)
+    nvk_nir_build_pad_NOP((b), (p), \
+       NVC0_FIFO_PKHDR_IL(SUBC_##class, class##_NO_OPERATION, 0))
+ 
++#define QMD_ALIGN 0x100
++#define QMD_ALLOC_SIZE QMD_ALIGN
++#define QMD_ROOT_SIZE (sizeof(struct nvk_ies_cs_qmd) + \
++                       sizeof(struct nvk_root_descriptor_table))
++
++static_assert(sizeof(struct nvk_ies_cs_qmd) % QMD_ALIGN == 0,
++              "QMD size is not properly algined");
++static_assert(sizeof(struct nvk_root_descriptor_table) % QMD_ALIGN == 0,
++              "Root descriptor table size is not aligned");
++static_assert(NVK_DGC_ALIGN >= QMD_ALIGN,
++              "QMD alignment requirement is a lower bound of DGC alignment");
++
+ static void
+ copy_repl_global_dw(nir_builder *b, nir_def *dst_addr, nir_def *src_addr,
+                     nir_def **repl_dw, uint32_t dw_count)
+@@ -238,11 +250,6 @@ copy_repl_global_dw(nir_builder *b, nir_def *dst_addr, nir_def *src_addr,
+    }
+ }
+ 
+-#define QMD_ALLOC_CHUNK_SIZE_B NAK_QMD_ALIGN_B
+-
+-static_assert(NVK_DGC_ALIGN >= NAK_QMD_ALIGN_B,
+-              "QMD alignment requirement is a lower bound of DGC alignment");
+-
+ static void
+ build_process_cs_cmd_seq(nir_builder *b, struct nvk_nir_push *p,
+                          nir_def *in_addr, nir_def *seq_idx,
+@@ -312,18 +319,7 @@ build_process_cs_cmd_seq(nir_builder *b, struct nvk_nir_push *p,
+          nir_def *disp_size_y = load_global_dw(b, token_addr, 1);
+          nir_def *disp_size_z = load_global_dw(b, token_addr, 2);
+ 
+-         /* We need space for both a QMD and a root table */
+-         const uint32_t qmd_size_B = nak_qmd_size_B(&pdev->info);
+-         const uint32_t root_offset_B = align(qmd_size_B, NAK_QMD_ALIGN_B);
+-         const uint32_t qmd_root_size_B =
+-            root_offset_B + sizeof(struct nvk_root_descriptor_table);
+-
+-         /* The root table is already aligned */
+-         static_assert(sizeof(struct nvk_root_descriptor_table) %
+-                       NAK_QMD_ALIGN_B == 0,
+-                       "Root descriptor table size is not aligned");
+-
+-         *qmd_size_per_seq_B_out += qmd_root_size_B;
++         *qmd_size_per_seq_B_out += QMD_ROOT_SIZE;
+ 
+          nir_push_if(b, nir_ior(b, nir_ior(b, nir_ine_imm(b, disp_size_x, 0),
+                                               nir_ine_imm(b, disp_size_y, 0)),
+@@ -332,16 +328,15 @@ build_process_cs_cmd_seq(nir_builder *b, struct nvk_nir_push *p,
+             /* The first dword in qmd_addr is an allocator in units of 256
+              * bytes.
+              */
+-            assert(qmd_root_size_B % QMD_ALLOC_CHUNK_SIZE_B == 0);
+             nir_def *qmd_idx =
+                nir_global_atomic(b, 32, in->qmd_pool_addr,
+-                                 nir_imm_int(b, qmd_root_size_B /
+-                                                QMD_ALLOC_CHUNK_SIZE_B),
++                                 nir_imm_int(b, QMD_ROOT_SIZE / QMD_ALIGN),
+                                  .atomic_op = nir_atomic_op_iadd);
+             nir_def *qmd_offset =
+-               nir_imul_imm(b, nir_u2u64(b, qmd_idx), QMD_ALLOC_CHUNK_SIZE_B);
++               nir_imul_imm(b, nir_u2u64(b, qmd_idx), QMD_ALIGN);
+             nir_def *qmd_addr = nir_iadd(b, in->qmd_pool_addr, qmd_offset);
+-            nir_def *root_addr = nir_iadd_imm(b, qmd_addr, root_offset_B);
++            nir_def *root_addr =
++               nir_iadd_imm(b, qmd_addr, sizeof(struct nvk_ies_cs_qmd));
+ 
+             /* Upload and patch the root descriptor table */
+             root_repl[root_dw(cs.group_count[0])] = disp_size_x;
+@@ -358,9 +353,6 @@ build_process_cs_cmd_seq(nir_builder *b, struct nvk_nir_push *p,
+             assert(qmd_layout.y_start == qmd_layout.x_start + 32);
+ 
+             nir_def *qmd_repl[sizeof(struct nvk_ies_cs_qmd) / 4] = {};
+-            uint32_t qmd_repl_count = qmd_size_B / 4;
+-            assert(qmd_repl_count <= ARRAY_SIZE(qmd_repl));
+-
+             qmd_repl[qmd_layout.x_start / 32] = disp_size_x;
+ 
+             if (qmd_layout.z_start == qmd_layout.y_start + 32) {
+@@ -390,7 +382,7 @@ build_process_cs_cmd_seq(nir_builder *b, struct nvk_nir_push *p,
+                           nir_unpack_64_2x32_split_y(b, root_addr_shifted));
+ 
+             copy_repl_global_dw(b, qmd_addr, shader_qmd_addr,
+-                                qmd_repl, qmd_repl_count);
++                                qmd_repl, ARRAY_SIZE(qmd_repl));
+ 
+             /* Now emit commands */
+             nir_def *invoc = nir_imul_2x32_64(b, disp_size_x, disp_size_y);
+@@ -722,8 +714,8 @@ build_init_shader(struct nvk_device *dev,
+    struct process_cmd_in in = load_process_cmd_in(b);
+ 
+    if (qmd_size_per_seq_B > 0) {
+-      /* Initialize the QMD allocator to 1 * QMD_ALLOC_CHUNK_SIZE_B so that
+-       * the QMDs we allocate don't stomp the allocator.
++      /* Initialize the QMD allocator to 1 * QMD_ALIGN so that the QMDs we
++       * allocate don't stomp the allocator.
+        */
+       assert(info->shaderStages == VK_SHADER_STAGE_COMPUTE_BIT);
+       store_global_dw(b, in.qmd_pool_addr, 0, nir_imm_int(b, 1));
+@@ -935,14 +927,14 @@ nvk_GetGeneratedCommandsMemoryRequirementsEXT(
+ 
+    uint64_t size = layout->cmd_seq_stride_B * (uint64_t)pInfo->maxSequenceCount;
+    if (layout->qmd_size_per_seq_B > 0) {
+-      size = align64(size, NAK_QMD_ALIGN_B);
+-      size += QMD_ALLOC_CHUNK_SIZE_B; /* One for the allocator */
++      size = align64(size, QMD_ALIGN);
++      size += QMD_ALLOC_SIZE;
+       size += layout->qmd_size_per_seq_B * pInfo->maxSequenceCount;
+    }
+ 
+    pMemoryRequirements->memoryRequirements = (VkMemoryRequirements) {
+       .size = size,
+-      .alignment = NAK_QMD_ALIGN_B,
++      .alignment = QMD_ALIGN,
+       .memoryTypeBits = BITFIELD_MASK(pdev->mem_type_count),
+    };
+ }
+@@ -983,10 +975,10 @@ nvk_cmd_process_cmds(struct nvk_cmd_buffer *cmd,
+    }
+ 
+    if (layout->qmd_size_per_seq_B > 0) {
+-      assert(info->preprocessAddress % NAK_QMD_ALIGN_B == 0);
++      assert(info->preprocessAddress % QMD_ALIGN == 0);
+       uint64_t qmd_offset =
+          layout->cmd_seq_stride_B * (uint64_t)info->maxSequenceCount;
+-      qmd_offset = align64(qmd_offset, NAK_QMD_ALIGN_B);
++      qmd_offset = align64(qmd_offset, QMD_ALIGN);
+       push.qmd_pool_addr = info->preprocessAddress + qmd_offset;
+    }
+ 
+diff --git a/src/nouveau/vulkan/nvk_indirect_execution_set.c b/src/nouveau/vulkan/nvk_indirect_execution_set.c
+index 1e74e15e620bf..cf900ee1dd941 100644
+--- a/src/nouveau/vulkan/nvk_indirect_execution_set.c
++++ b/src/nouveau/vulkan/nvk_indirect_execution_set.c
+@@ -17,13 +17,7 @@ nvk_ies_map(struct nvk_indirect_execution_set *ies, uint32_t index)
+    return ies->mem->map + (index * (size_t)ies->stride_B);
+ }
+ 
+-static uint32_t
+-nvk_ies_stride_cs(const struct nvk_physical_device *pdev)
+-{
+-   return align(nak_qmd_size_B(&pdev->info), NAK_QMD_ALIGN_B);
+-}
+-
+-static void
++void
+ nvk_ies_cs_qmd_init(const struct nvk_physical_device *pdev,
+                     struct nvk_ies_cs_qmd *qmd,
+                     struct nvk_shader *shader)
+@@ -61,9 +55,8 @@ nvk_ies_cs_qmd_init(const struct nvk_physical_device *pdev,
+       }
+    }
+ 
+-   const uint32_t qmd_size = nak_qmd_size_B(&pdev->info);
+-   assert(qmd_size <= sizeof(qmd->qmd));
+-   nak_fill_qmd(&pdev->info, &shader->info, &qmd_info, qmd->qmd, qmd_size);
++   nak_fill_qmd(&pdev->info, &shader->info, &qmd_info,
++                qmd->qmd, sizeof(qmd->qmd));
+ }
+ 
+ static void
+@@ -72,14 +65,11 @@ nvk_ies_set_cs(struct nvk_device *dev,
+                uint32_t index,
+                struct nvk_shader *shader)
+ {
+-   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+-   const uint32_t qmd_size = nak_qmd_size_B(&pdev->info);
+-
+    struct nvk_ies_cs_qmd qmd = {};
+-   nvk_ies_cs_qmd_init(pdev, &qmd, shader);
++   nvk_ies_cs_qmd_init(nvk_device_physical(dev), &qmd, shader);
+ 
+-   assert(qmd_size <= ies->stride_B);
+-   memcpy(nvk_ies_map(ies, index), &qmd, qmd_size);
++   assert(sizeof(qmd) <= ies->stride_B);
++   memcpy(nvk_ies_map(ies, index), &qmd, sizeof(qmd));
+ }
+ 
+ uint16_t
+@@ -266,7 +256,7 @@ nvk_CreateIndirectExecutionSetEXT(VkDevice _device,
+       if (pipeline->stages & VK_SHADER_STAGE_COMPUTE_BIT) {
+          assert(pipeline->stages == VK_SHADER_STAGE_COMPUTE_BIT);
+          ies->type = NVK_IES_TYPE_CS_QMD;
+-         ies->stride_B = nvk_ies_stride_cs(pdev);
++         ies->stride_B = sizeof(struct nvk_ies_cs_qmd);
+       } else if (pipeline->stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
+          assert(!(pipeline->stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
+          ies->type = NVK_IES_TYPE_GFX_PIPELINE;
+@@ -291,7 +281,7 @@ nvk_CreateIndirectExecutionSetEXT(VkDevice _device,
+       if (stages & VK_SHADER_STAGE_COMPUTE_BIT) {
+          assert(stages == VK_SHADER_STAGE_COMPUTE_BIT);
+          ies->type = NVK_IES_TYPE_CS_QMD;
+-         ies->stride_B = nvk_ies_stride_cs(pdev);
++         ies->stride_B = sizeof(struct nvk_ies_cs_qmd);
+       } else if (stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
+          assert(!(stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
+          ies->type = NVK_IES_TYPE_GFX_SHADER;
+diff --git a/src/nouveau/vulkan/nvk_indirect_execution_set.h b/src/nouveau/vulkan/nvk_indirect_execution_set.h
+index 599fd5d48b7b6..26e5f5d7bb77b 100644
+--- a/src/nouveau/vulkan/nvk_indirect_execution_set.h
++++ b/src/nouveau/vulkan/nvk_indirect_execution_set.h
+@@ -7,8 +7,6 @@
+ 
+ #include "nvk_private.h"
+ 
+-#include "nak.h"
+-
+ struct nvk_physical_device;
+ struct nvk_shader;
+ struct nvkmd_mem;
+@@ -22,10 +20,20 @@ enum nvk_ies_type {
+ PRAGMA_DIAGNOSTIC_PUSH
+ PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+ struct nvk_ies_cs_qmd {
+-   uint32_t qmd[NAK_MAX_QMD_DWORDS];
++   uint32_t qmd[64];
+ };
+ PRAGMA_DIAGNOSTIC_POP
+ 
++static inline uint16_t
++nvk_ies_cs_qmd_max_dw_count(const struct nvk_physical_device *pdev)
++{
++   return 64;
++}
++
++void nvk_ies_cs_qmd_init(const struct nvk_physical_device *pdev,
++                         struct nvk_ies_cs_qmd *qmd,
++                         struct nvk_shader *shader);
++
+ PRAGMA_DIAGNOSTIC_PUSH
+ PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+ struct nvk_ies_gfx_shader {
+-- 
+GitLab
+
+From 238534e069298b1eb134c66019a69661d1a60249 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Mon, 25 Aug 2025 17:12:12 -0400
+Subject: [PATCH REVERT 07/11] nak/hw_runner: Allow for variable sized QMDs
+
+This is a REVERT patch for: nak/hw_runner: Allow for variable sized QMDs
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Backport-to: 25.2
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/compiler/nak/hw_runner.rs | 30 ++++++++++++++++-----------
+ 1 file changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/hw_runner.rs b/src/nouveau/compiler/nak/hw_runner.rs
+index 73ee79b1cd40d..fa4fffb6407ec 100644
+--- a/src/nouveau/compiler/nak/hw_runner.rs
++++ b/src/nouveau/compiler/nak/hw_runner.rs
+@@ -334,10 +334,7 @@ struct QMDHeapImpl {
+     free: Vec<(u64, *mut std::os::raw::c_void)>,
+ }
+ 
+-struct QMDHeap {
+-    pub qmd_size_B: u32,
+-    imp: Mutex<QMDHeapImpl>,
+-}
++struct QMDHeap(Mutex<QMDHeapImpl>);
+ 
+ struct QMD<'a> {
+     heap: &'a QMDHeap,
+@@ -347,29 +344,26 @@ struct QMD<'a> {
+ 
+ impl Drop for QMD<'_> {
+     fn drop(&mut self) {
+-        let mut heap = self.heap.imp.lock().unwrap();
++        let mut heap = self.heap.0.lock().unwrap();
+         heap.free.push((self.addr, self.map));
+     }
+ }
+ 
+ impl QMDHeap {
+     const BO_SIZE: u32 = 1 << 16;
++    const QMD_SIZE: u32 = 0x100;
+ 
+     fn new(dev: Arc<Device>) -> Self {
+-        let qmd_size_B = unsafe { nak_qmd_size_B(dev.dev_info()) };
+-        Self {
+-            qmd_size_B,
+-            imp: Mutex::new(QMDHeapImpl {
+-                dev,
+-                bos: Vec::new(),
+-                last_offset: Self::BO_SIZE,
+-                free: Vec::new(),
+-            }),
+-        }
++        Self(Mutex::new(QMDHeapImpl {
++            dev,
++            bos: Vec::new(),
++            last_offset: Self::BO_SIZE,
++            free: Vec::new(),
++        }))
+     }
+ 
+     fn alloc_qmd<'a>(&'a self) -> io::Result<QMD<'a>> {
+-        let mut imp = self.imp.lock().unwrap();
++        let mut imp = self.0.lock().unwrap();
+         if let Some((addr, map)) = imp.free.pop() {
+             return Ok(QMD {
+                 heap: self,
+@@ -388,7 +382,7 @@ impl QMDHeap {
+         let addr = bo.addr + u64::from(imp.last_offset);
+         let map =
+             unsafe { bo.map.byte_offset(imp.last_offset.try_into().unwrap()) };
+-        imp.last_offset += self.qmd_size_B.next_multiple_of(NAK_QMD_ALIGN_B);
++        imp.last_offset += Self::QMD_SIZE;
+ 
+         Ok(QMD {
+             heap: self,
+@@ -510,7 +504,7 @@ impl<'a> Runner {
+                 &shader.info,
+                 &qmd_info,
+                 qmd.map,
+-                self.qmd_heap.qmd_size_B.try_into().unwrap(),
++                QMDHeap::QMD_SIZE.try_into().unwrap(),
+             );
+         }
+ 
+-- 
+GitLab
+
+From 02ef6a51587b6a57039515c8b6dbc4f90cc94e2f Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Mon, 25 Aug 2025 17:04:36 -0400
+Subject: [PATCH REVERT 06/11] nak: Add a nak_qmd_size_B() query
+
+This is a REVERT patch for: nak: Add a nak_qmd_size_B() query
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Backport-to: 25.2
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/compiler/meson.build |  1 -
+ src/nouveau/compiler/nak.h       |  6 ------
+ src/nouveau/compiler/nak/qmd.rs  | 21 ---------------------
+ 3 files changed, 28 deletions(-)
+
+diff --git a/src/nouveau/compiler/meson.build b/src/nouveau/compiler/meson.build
+index 91565201b7f0e..bbfda25eab1ba 100644
+--- a/src/nouveau/compiler/meson.build
++++ b/src/nouveau/compiler/meson.build
+@@ -65,7 +65,6 @@ _nak_bindings_rs = rust.bindgen(
+     '--allowlist-type', 'nak_.*',
+     '--allowlist-type', 'nouveau_ws_.*',
+     '--allowlist-var', 'DRM_.*',
+-    '--allowlist-var', 'NAK_.*',
+     '--allowlist-var', 'NVIDIA_VENDOR_ID',
+     '--allowlist-function', 'drm.*',
+     '--allowlist-function', 'nak_.*',
+diff --git a/src/nouveau/compiler/nak.h b/src/nouveau/compiler/nak.h
+index bdf3d57abca17..d6ca04096b398 100644
+--- a/src/nouveau/compiler/nak.h
++++ b/src/nouveau/compiler/nak.h
+@@ -251,12 +251,6 @@ struct nak_qmd_info {
+    struct nak_qmd_cbuf cbufs[8];
+ };
+ 
+-#define NAK_QMD_ALIGN_B 256
+-#define NAK_MAX_QMD_SIZE_B 256
+-#define NAK_MAX_QMD_DWORDS (NAK_MAX_QMD_SIZE_B / 4)
+-
+-uint32_t nak_qmd_size_B(const struct nv_device_info *dev);
+-
+ void nak_fill_qmd(const struct nv_device_info *dev,
+                   const struct nak_shader_info *info,
+                   const struct nak_qmd_info *qmd_info,
+diff --git a/src/nouveau/compiler/nak/qmd.rs b/src/nouveau/compiler/nak/qmd.rs
+index bb3cfb01bac72..0ec943d97be15 100644
+--- a/src/nouveau/compiler/nak/qmd.rs
++++ b/src/nouveau/compiler/nak/qmd.rs
+@@ -580,27 +580,6 @@ fn fill_qmd<Q: QMD>(info: &nak_shader_info, qmd_info: &nak_qmd_info) -> Q {
+     qmd
+ }
+ 
+-#[no_mangle]
+-pub extern "C" fn nak_qmd_size_B(dev: &nv_device_info) -> u32 {
+-    let size_B = if dev.cls_compute >= clcdc0::BLACKWELL_COMPUTE_A {
+-        size_of::<Qmd5_0>().try_into().unwrap()
+-    } else if dev.cls_compute >= clcbc0::HOPPER_COMPUTE_A {
+-        size_of::<Qmd4_0>().try_into().unwrap()
+-    } else if dev.cls_compute >= clc6c0::AMPERE_COMPUTE_A {
+-        size_of::<Qmd3_0>().try_into().unwrap()
+-    } else if dev.cls_compute >= clc3c0::VOLTA_COMPUTE_A {
+-        size_of::<Qmd2_2>().try_into().unwrap()
+-    } else if dev.cls_compute >= clc0c0::PASCAL_COMPUTE_A {
+-        size_of::<Qmd2_1>().try_into().unwrap()
+-    } else if dev.cls_compute >= cla0c0::KEPLER_COMPUTE_A {
+-        size_of::<Qmd0_6>().try_into().unwrap()
+-    } else {
+-        panic!("Unknown shader model");
+-    };
+-    assert!(size_B <= NAK_MAX_QMD_SIZE_B);
+-    size_B
+-}
+-
+ #[no_mangle]
+ pub extern "C" fn nak_fill_qmd(
+     dev: *const nv_device_info,
+-- 
+GitLab
+
+From 8e93a763a36fd8999aedd5cc899877f3da4b86d9 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 22 Aug 2025 22:11:14 -0400
+Subject: [PATCH REVERT 05/11] nouveau/push: Handle more recent versions of 6F
+
+This is a REVERT patch for: nouveau/push: Handle more recent versions of 6F
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/headers/meson.build |  1 -
+ src/nouveau/headers/nv_push.c   | 26 +++++++++++++-------------
+ 2 files changed, 13 insertions(+), 14 deletions(-)
+
+diff --git a/src/nouveau/headers/meson.build b/src/nouveau/headers/meson.build
+index de8865f7c99c4..6bd3cee30eb19 100644
+--- a/src/nouveau/headers/meson.build
++++ b/src/nouveau/headers/meson.build
+@@ -10,7 +10,6 @@ nv_classes = [
+   'cla097',
+   'cla140',
+   'cla297',
+-  'clb06f',
+   'clb097',
+   'clb0c0',
+   'clb197',
+diff --git a/src/nouveau/headers/nv_push.c b/src/nouveau/headers/nv_push.c
+index 13aef368f75e9..e19a596828222 100644
+--- a/src/nouveau/headers/nv_push.c
++++ b/src/nouveau/headers/nv_push.c
+@@ -15,7 +15,6 @@
+ #include "nv_push_cla040.h"
+ #include "nv_push_cla0c0.h"
+ #include "nv_push_cla140.h"
+-#include "nv_push_clb06f.h"
+ #include "nv_push_clb197.h"
+ #include "nv_push_clc0c0.h"
+ #include "nv_push_clc1b5.h"
+@@ -109,13 +108,6 @@ vk_push_print(FILE *fp, const struct nv_push *push,
+          fprintf(fp, "HDR %x subch %i", hdr, subchan);
+       }
+ 
+-      if (mthd == 0) { /* SET_OBJECT */
+-         curr_subchans[subchan] = value & 0xffff;
+-      }
+-      int class_id = curr_subchans[subchan];
+-      int cls_hi = (class_id & 0xff00) >> 8;
+-      int cls_lo = class_id & 0xff;
+-
+       cur++;
+ 
+       const char *mthd_name = "";
+@@ -176,13 +168,14 @@ vk_push_print(FILE *fp, const struct nv_push *push,
+       while (count--) {
+          if (!is_tert) {
+             if (mthd < 0x100) {
+-               if (cls_hi >= 0xc5)
++               if (devinfo->cls_eng3d >= 0xc597)
+                   mthd_name = P_PARSE_NVC56F_MTHD(mthd);
+-               else if (cls_hi >= 0xb0)
+-                  mthd_name = P_PARSE_NVB06F_MTHD(mthd);
+                else
+                   mthd_name = P_PARSE_NV906F_MTHD(mthd);
+             } else {
++               int class_id = curr_subchans[subchan];
++               int cls_lo = class_id & 0xff;
++               int cls_hi = (class_id & 0xff00) >> 8;
+                switch (cls_lo) {
+                case 0x97:
+                   if (cls_hi >= 0xc7)
+@@ -255,11 +248,14 @@ vk_push_print(FILE *fp, const struct nv_push *push,
+ 
+          fprintf(fp, "\tmthd %04x %s\n", mthd, mthd_name);
+          if (mthd < 0x100) {
+-            if (cls_hi >= 0xb0)
+-               P_DUMP_NVB06F_MTHD_DATA(fp, mthd, value, "\t\t");
+-            else
+-               P_DUMP_NV906F_MTHD_DATA(fp, mthd, value, "\t\t");
++            P_DUMP_NV906F_MTHD_DATA(fp, mthd, value, "\t\t");
++            if (mthd == 0) { /* SET_OBJECT */
++               curr_subchans[subchan] = value & 0xffff;
++            }
+          } else {
++            int class_id = curr_subchans[subchan];
++            int cls_lo = class_id & 0xff;
++            int cls_hi = (class_id & 0xff00) >> 8;
+             switch (cls_lo) {
+             case 0x97:
+                if (cls_hi >= 0xc5)
+-- 
+GitLab
+
+From 38108b2c4ba152b2e935c8b83da3d57e5beb51ec Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 13 Jun 2025 14:51:07 -0400
+Subject: [PATCH REVERT 04/11] nvk,nvkmd: Move push dumping to NVKMD
+
+This is a REVERT patch for: nvk,nvkmd: Move push dumping to NVKMD
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/vulkan/nvk_cmd_buffer.c | 41 +++++++++++++++++++++++++++++
+ src/nouveau/vulkan/nvk_cmd_buffer.h |  2 ++
+ src/nouveau/vulkan/nvk_queue.c      | 35 +++++++++++++++++++++++-
+ src/nouveau/vulkan/nvkmd/nvkmd.c    | 63 -------------------------------------
+ src/nouveau/vulkan/nvkmd/nvkmd.h    |  7 ++++-
+ 5 files changed, 83 insertions(+), 65 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.c b/src/nouveau/vulkan/nvk_cmd_buffer.c
+index 6412b5a3996fa..ac8e50781141b 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.c
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
+@@ -1198,6 +1198,47 @@ nvk_cmd_buffer_get_cbuf_descriptor_addr(struct nvk_cmd_buffer *cmd,
+    }
+ }
+ 
++void
++nvk_cmd_buffer_dump(struct nvk_cmd_buffer *cmd, FILE *fp)
++{
++   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
++
++   util_dynarray_foreach(&cmd->pushes, struct nvk_cmd_push, p) {
++      if (p->map) {
++         struct nv_push push = {
++            .start = (uint32_t *)p->map,
++            .end = (uint32_t *)((char *)p->map + p->range),
++         };
++         vk_push_print(fp, &push, &pdev->info);
++      } else {
++         const uint64_t addr = p->addr;
++         fprintf(fp, "<%u B of INDIRECT DATA at 0x%" PRIx64 ">\n",
++                 p->range, addr);
++
++         uint64_t mem_offset = 0;
++         struct nvkmd_mem *mem =
++            nvkmd_dev_lookup_mem_by_va(dev->nvkmd, addr, &mem_offset);
++         if (mem != NULL) {
++            void *map;
++            VkResult map_result = nvkmd_mem_map(mem, &dev->vk.base,
++                                                NVKMD_MEM_MAP_RD, NULL,
++                                                &map);
++            if (map_result == VK_SUCCESS) {
++               struct nv_push push = {
++                  .start = mem->map + mem_offset,
++                  .end = mem->map + mem_offset + p->range,
++               };
++               vk_push_print(fp, &push, &pdev->info);
++               nvkmd_mem_unmap(mem, 0);
++            }
++
++            nvkmd_mem_unref(mem);
++         }
++      }
++   }
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ nvk_CmdPushDescriptorSetWithTemplate2KHR(
+    VkCommandBuffer commandBuffer,
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.h b/src/nouveau/vulkan/nvk_cmd_buffer.h
+index 2fa67bee21fec..25f9bf48c7162 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.h
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.h
+@@ -391,6 +391,8 @@ void nvk_cmd_dispatch_shader(struct nvk_cmd_buffer *cmd,
+ void nvk_meta_resolve_rendering(struct nvk_cmd_buffer *cmd,
+                                 const VkRenderingInfo *pRenderingInfo);
+ 
++void nvk_cmd_buffer_dump(struct nvk_cmd_buffer *cmd, FILE *fp);
++
+ void nvk_linear_render_copy(struct nvk_cmd_buffer *cmd,
+                             const struct nvk_image_view *iview,
+                             VkRect2D copy_rect,
+diff --git a/src/nouveau/vulkan/nvk_queue.c b/src/nouveau/vulkan/nvk_queue.c
+index f0cd25b18cc28..bb1220862a134 100644
+--- a/src/nouveau/vulkan/nvk_queue.c
++++ b/src/nouveau/vulkan/nvk_queue.c
+@@ -210,8 +210,11 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
+                       struct vk_queue_submit *submit)
+ {
+    struct nvk_device *dev = nvk_queue_device(queue);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    VkResult result;
+ 
++   const bool sync = pdev->debug_flags & NVK_DEBUG_PUSH_SYNC;
++
+    if (submit->command_buffer_count > 0) {
+       result = nvk_queue_state_update(queue, &queue->state);
+       if (result != VK_SUCCESS)
+@@ -274,7 +277,23 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
+    if (result != VK_SUCCESS)
+       goto fail;
+ 
++   if (sync) {
++      result = nvkmd_ctx_sync(queue->exec_ctx, &queue->vk.base);
++      if (result != VK_SUCCESS)
++         goto fail;
++   }
++
+ fail:
++   if ((sync && result != VK_SUCCESS) ||
++       (pdev->debug_flags & NVK_DEBUG_PUSH_DUMP)) {
++      for (unsigned i = 0; i < submit->command_buffer_count; i++) {
++         struct nvk_cmd_buffer *cmd =
++            container_of(submit->command_buffers[i], struct nvk_cmd_buffer, vk);
++
++         nvk_cmd_buffer_dump(cmd, stderr);
++      }
++   }
++
+    return result;
+ }
+ 
+@@ -308,6 +327,8 @@ static VkResult
+ nvk_queue_push(struct nvk_queue *queue, const struct nv_push *push)
+ {
+    struct nvk_device *dev = nvk_queue_device(queue);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
++   VkResult result;
+ 
+    if (vk_queue_is_lost(&queue->vk))
+       return VK_ERROR_DEVICE_LOST;
+@@ -315,8 +336,18 @@ nvk_queue_push(struct nvk_queue *queue, const struct nv_push *push)
+    if (nv_push_dw_count(push) == 0)
+       return VK_SUCCESS;
+ 
+-   return nvk_mem_stream_push(dev, &queue->push_stream, queue->exec_ctx,
+-                              push->start, nv_push_dw_count(push), NULL);
++   const bool sync = pdev->debug_flags & NVK_DEBUG_PUSH_SYNC;
++
++   result = nvk_mem_stream_push(dev, &queue->push_stream, queue->exec_ctx,
++                                push->start, nv_push_dw_count(push), NULL);
++   if (result == VK_SUCCESS && sync)
++      result = nvkmd_ctx_sync(queue->exec_ctx, &queue->vk.base);
++
++   if ((sync && result != VK_SUCCESS) ||
++       (pdev->debug_flags & NVK_DEBUG_PUSH_DUMP))
++      vk_push_print(stderr, push, &pdev->info);
++
++   return result;
+ }
+ 
+ static VkResult
+diff --git a/src/nouveau/vulkan/nvkmd/nvkmd.c b/src/nouveau/vulkan/nvkmd/nvkmd.c
+index d123734d734a0..0b223af0f36c7 100644
+--- a/src/nouveau/vulkan/nvkmd/nvkmd.c
++++ b/src/nouveau/vulkan/nvkmd/nvkmd.c
+@@ -5,7 +5,6 @@
+ 
+ #include "nvkmd.h"
+ #include "nouveau/nvkmd_nouveau.h"
+-#include "nv_push.h"
+ 
+ #include <inttypes.h>
+ 
+@@ -258,68 +257,6 @@ nvkmd_va_unbind(struct nvkmd_va *va,
+    return va->ops->unbind(va, log_obj, va_offset_B, range_B);
+ }
+ 
+-static void
+-nvkmd_ctx_exec_dump(struct nvkmd_dev *dev, struct vk_object_base *log_obj,
+-                    FILE *fp, const struct nvkmd_ctx_exec *exec)
+-{
+-   uint64_t mem_offset_B = 0;
+-   struct nvkmd_mem *mem =
+-      nvkmd_dev_lookup_mem_by_va(dev, exec->addr, &mem_offset_B);
+-   if (mem == NULL) {
+-      fprintf(fp, "<%u B of DATA at UNKNOWN ADDRESS 0x%" PRIx64 ">\n",
+-              exec->size_B, exec->addr);
+-      return;
+-   }
+-
+-   void *map;
+-   VkResult map_result = nvkmd_mem_map(mem, log_obj,
+-                                       NVKMD_MEM_MAP_RD, NULL, &map);
+-   if (map_result != VK_SUCCESS) {
+-      fprintf(fp, "<%u B of DATA at UNMAPPABLE ADDRESS 0x%" PRIx64 ">\n",
+-              exec->size_B, exec->addr);
+-      goto fail_lookup;
+-   }
+-
+-   assert(mem_offset_B < mem->size_B);
+-   uint32_t dump_size_B = MIN2(exec->size_B, mem->size_B - mem_offset_B);
+-
+-   struct nv_push push = {
+-      .start = mem->map + mem_offset_B,
+-      .end = mem->map + mem_offset_B + dump_size_B,
+-   };
+-   vk_push_print(fp, &push, &dev->pdev->dev_info);
+-
+-   if (dump_size_B < exec->size_B) {
+-      fprintf(fp, "<%u B of DATA at UNKNOWN ADDRESS 0x%" PRIx64 ">\n",
+-              exec->size_B - dump_size_B, exec->addr + dump_size_B);
+-   }
+-
+-   nvkmd_mem_unmap(mem, 0);
+-fail_lookup:
+-   nvkmd_mem_unref(mem);
+-}
+-
+-VkResult MUST_CHECK
+-nvkmd_ctx_exec(struct nvkmd_ctx *ctx,
+-               struct vk_object_base *log_obj,
+-               uint32_t exec_count,
+-               const struct nvkmd_ctx_exec *execs)
+-{
+-   const bool sync = ctx->dev->pdev->debug_flags & NVK_DEBUG_PUSH_SYNC;
+-
+-   VkResult result = ctx->ops->exec(ctx, log_obj, exec_count, execs);
+-   if (result == VK_SUCCESS && sync)
+-      result = ctx->ops->sync(ctx, log_obj);
+-
+-   if ((sync && result != VK_SUCCESS) ||
+-       (ctx->dev->pdev->debug_flags & NVK_DEBUG_PUSH_DUMP)) {
+-      for (uint32_t i = 0; i < exec_count; i++)
+-         nvkmd_ctx_exec_dump(ctx->dev, log_obj, stderr, &execs[i]);
+-   }
+-
+-   return result;
+-}
+-
+ VkResult MUST_CHECK
+ nvkmd_ctx_bind(struct nvkmd_ctx *ctx,
+                struct vk_object_base *log_obj,
+diff --git a/src/nouveau/vulkan/nvkmd/nvkmd.h b/src/nouveau/vulkan/nvkmd/nvkmd.h
+index c934c1cdd526a..a38473e10e530 100644
+--- a/src/nouveau/vulkan/nvkmd/nvkmd.h
++++ b/src/nouveau/vulkan/nvkmd/nvkmd.h
+@@ -546,11 +546,14 @@ nvkmd_ctx_wait(struct nvkmd_ctx *ctx,
+    return ctx->ops->wait(ctx, log_obj, wait_count, waits);
+ }
+ 
+-VkResult MUST_CHECK
++static inline VkResult MUST_CHECK
+ nvkmd_ctx_exec(struct nvkmd_ctx *ctx,
+                struct vk_object_base *log_obj,
+                uint32_t exec_count,
+-               const struct nvkmd_ctx_exec *execs);
++               const struct nvkmd_ctx_exec *execs)
++{
++   return ctx->ops->exec(ctx, log_obj, exec_count, execs);
++}
+ 
+ VkResult MUST_CHECK
+ nvkmd_ctx_bind(struct nvkmd_ctx *ctx,
+-- 
+GitLab
+
+From 7a50d7004b8b81d03d681a818cf1efadfd51a701 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 13 Jun 2025 14:31:20 -0400
+Subject: [PATCH REVERT 03/11] nvk/nvkmd: Track all memory objects by default
+
+This is a REVERT patch for: nvk/nvkmd: Track all memory objects by default
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/vulkan/nvk_buffer.c  |  6 ++++
+ src/nouveau/vulkan/nvkmd/nvkmd.c | 72 ++++++++++++++++++++--------------------
+ src/nouveau/vulkan/nvkmd/nvkmd.h | 30 +++++++++--------
+ 3 files changed, 64 insertions(+), 44 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_buffer.c b/src/nouveau/vulkan/nvk_buffer.c
+index 55faf24750cd2..3c3c9fa309168 100644
+--- a/src/nouveau/vulkan/nvk_buffer.c
++++ b/src/nouveau/vulkan/nvk_buffer.c
+@@ -239,8 +239,14 @@ nvk_bind_buffer_memory(struct nvk_device *dev,
+ {
+    VK_FROM_HANDLE(nvk_device_memory, mem, info->memory);
+    VK_FROM_HANDLE(nvk_buffer, buffer, info->buffer);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    VkResult result = VK_SUCCESS;
+ 
++   if ((pdev->debug_flags & NVK_DEBUG_PUSH_DUMP) &&
++       (buffer->vk.usage & (VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT_KHR |
++                            VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT)))
++      nvkmd_dev_track_mem(dev->nvkmd, mem->mem);
++
+    if (buffer->va != NULL) {
+       result = nvkmd_va_bind_mem(buffer->va, &buffer->vk.base,
+                                  0 /* va_offset */,
+diff --git a/src/nouveau/vulkan/nvkmd/nvkmd.c b/src/nouveau/vulkan/nvkmd/nvkmd.c
+index 0b223af0f36c7..bac54d337a9c8 100644
+--- a/src/nouveau/vulkan/nvkmd/nvkmd.c
++++ b/src/nouveau/vulkan/nvkmd/nvkmd.c
+@@ -8,22 +8,26 @@
+ 
+ #include <inttypes.h>
+ 
+-static void
+-nvkmd_dev_add_mem(struct nvkmd_dev *dev,
+-                  struct nvkmd_mem *mem)
++void
++nvkmd_dev_track_mem(struct nvkmd_dev *dev,
++                    struct nvkmd_mem *mem)
+ {
+-   simple_mtx_lock(&dev->mems_mutex);
+-   list_addtail(&mem->link, &dev->mems);
+-   simple_mtx_unlock(&dev->mems_mutex);
++   if (mem->link.next == NULL) {
++      simple_mtx_lock(&dev->mems_mutex);
++      list_addtail(&mem->link, &dev->mems);
++      simple_mtx_unlock(&dev->mems_mutex);
++   }
+ }
+ 
+ static void
+-nvkmd_dev_remove_mem(struct nvkmd_dev *dev,
+-                     struct nvkmd_mem *mem)
++nvkmd_dev_untrack_mem(struct nvkmd_dev *dev,
++                      struct nvkmd_mem *mem)
+ {
+-   simple_mtx_lock(&dev->mems_mutex);
+-   list_del(&mem->link);
+-   simple_mtx_unlock(&dev->mems_mutex);
++   if (mem->link.next != NULL) {
++      simple_mtx_lock(&dev->mems_mutex);
++      list_del(&mem->link);
++      simple_mtx_unlock(&dev->mems_mutex);
++   }
+ }
+ 
+ static struct nvkmd_mem *
+@@ -88,38 +92,6 @@ nvkmd_try_create_pdev_for_drm(struct _drmDevice *drm_device,
+                                         debug_flags, pdev_out);
+ }
+ 
+-VkResult MUST_CHECK
+-nvkmd_dev_alloc_mem(struct nvkmd_dev *dev,
+-                    struct vk_object_base *log_obj,
+-                    uint64_t size_B, uint64_t align_B,
+-                    enum nvkmd_mem_flags flags,
+-                    struct nvkmd_mem **mem_out)
+-{
+-   VkResult result = dev->ops->alloc_mem(dev, log_obj, size_B, align_B,
+-                                         flags, mem_out);
+-   if (result == VK_SUCCESS)
+-      nvkmd_dev_add_mem(dev, *mem_out);
+-
+-   return result;
+-}
+-
+-VkResult MUST_CHECK
+-nvkmd_dev_alloc_tiled_mem(struct nvkmd_dev *dev,
+-                          struct vk_object_base *log_obj,
+-                          uint64_t size_B, uint64_t align_B,
+-                          uint8_t pte_kind, uint16_t tile_mode,
+-                          enum nvkmd_mem_flags flags,
+-                          struct nvkmd_mem **mem_out)
+-{
+-   VkResult result = dev->ops->alloc_tiled_mem(dev, log_obj, size_B, align_B,
+-                                               pte_kind, tile_mode,
+-                                               flags, mem_out);
+-   if (result == VK_SUCCESS)
+-      nvkmd_dev_add_mem(dev, *mem_out);
+-
+-   return result;
+-}
+-
+ VkResult
+ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
+                            struct vk_object_base *log_obj,
+@@ -148,18 +120,6 @@ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
+    return VK_SUCCESS;
+ }
+ 
+-VkResult MUST_CHECK
+-nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
+-                         struct vk_object_base *log_obj,
+-                         int fd, struct nvkmd_mem **mem_out)
+-{
+-   VkResult result = dev->ops->import_dma_buf(dev, log_obj, fd, mem_out);
+-   if (result == VK_SUCCESS)
+-      nvkmd_dev_add_mem(dev, *mem_out);
+-
+-   return result;
+-}
+-
+ VkResult MUST_CHECK
+ nvkmd_dev_alloc_va(struct nvkmd_dev *dev,
+                    struct vk_object_base *log_obj,
+@@ -309,7 +269,7 @@ nvkmd_mem_unref(struct nvkmd_mem *mem)
+    if (mem->map != NULL)
+       mem->ops->unmap(mem, 0, mem->map);
+ 
+-   nvkmd_dev_remove_mem(mem->dev, mem);
++   nvkmd_dev_untrack_mem(mem->dev, mem);
+ 
+    mem->ops->free(mem);
+ }
+diff --git a/src/nouveau/vulkan/nvkmd/nvkmd.h b/src/nouveau/vulkan/nvkmd/nvkmd.h
+index a38473e10e530..1aa990e1b098b 100644
+--- a/src/nouveau/vulkan/nvkmd/nvkmd.h
++++ b/src/nouveau/vulkan/nvkmd/nvkmd.h
+@@ -424,20 +424,27 @@ nvkmd_dev_get_drm_fd(struct nvkmd_dev *dev)
+    return dev->ops->get_drm_fd(dev);
+ }
+ 
+-VkResult MUST_CHECK
++static inline VkResult MUST_CHECK
+ nvkmd_dev_alloc_mem(struct nvkmd_dev *dev,
+                     struct vk_object_base *log_obj,
+                     uint64_t size_B, uint64_t align_B,
+                     enum nvkmd_mem_flags flags,
+-                    struct nvkmd_mem **mem_out);
++                    struct nvkmd_mem **mem_out)
++{
++   return dev->ops->alloc_mem(dev, log_obj, size_B, align_B, flags, mem_out);
++}
+ 
+-VkResult MUST_CHECK
++static inline VkResult MUST_CHECK
+ nvkmd_dev_alloc_tiled_mem(struct nvkmd_dev *dev,
+                           struct vk_object_base *log_obj,
+                           uint64_t size_B, uint64_t align_B,
+                           uint8_t pte_kind, uint16_t tile_mode,
+                           enum nvkmd_mem_flags flags,
+-                          struct nvkmd_mem **mem_out);
++                          struct nvkmd_mem **mem_out)
++{
++   return dev->ops->alloc_tiled_mem(dev, log_obj, size_B, align_B,
++                                    pte_kind, tile_mode, flags, mem_out);
++}
+ 
+ /* Implies NVKMD_MEM_CAN_MAP */
+ VkResult MUST_CHECK
+@@ -448,16 +455,23 @@ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
+                            enum nvkmd_mem_map_flags map_flags,
+                            struct nvkmd_mem **mem_out);
+ 
+-VkResult MUST_CHECK
+-nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
+-                         struct vk_object_base *log_obj,
+-                         int fd, struct nvkmd_mem **mem_out);
++void
++nvkmd_dev_track_mem(struct nvkmd_dev *dev,
++                    struct nvkmd_mem *mem);
+ 
+ struct nvkmd_mem *
+ nvkmd_dev_lookup_mem_by_va(struct nvkmd_dev *dev,
+                            uint64_t addr,
+                            uint64_t *offset_out);
+ 
++static inline VkResult MUST_CHECK
++nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
++                         struct vk_object_base *log_obj,
++                         int fd, struct nvkmd_mem **mem_out)
++{
++   return dev->ops->import_dma_buf(dev, log_obj, fd, mem_out);
++}
++
+ VkResult MUST_CHECK
+ nvkmd_dev_alloc_va(struct nvkmd_dev *dev,
+                    struct vk_object_base *log_obj,
+-- 
+GitLab
+
+From 7f95c070801792ae9ab7ffb869681d7482e9fccd Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 22 Aug 2025 20:50:27 -0400
+Subject: [PATCH REVERT 02/11] nvk/nvkmd: Stop setting WAIT_FOR_SUBMIT for sync
+
+This is a REVERT patch for: nvk/nvkmd: Stop setting WAIT_FOR_SUBMIT for sync
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/vulkan/nvkmd/nouveau/nvkmd_nouveau_ctx.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvkmd/nouveau/nvkmd_nouveau_ctx.c b/src/nouveau/vulkan/nvkmd/nouveau/nvkmd_nouveau_ctx.c
+index 6ed3f91f30500..ee5db4231831e 100644
+--- a/src/nouveau/vulkan/nvkmd/nouveau/nvkmd_nouveau_ctx.c
++++ b/src/nouveau/vulkan/nvkmd/nouveau/nvkmd_nouveau_ctx.c
+@@ -244,8 +244,10 @@ nvkmd_nouveau_exec_ctx_sync(struct nvkmd_ctx *_ctx,
+    if (result != VK_SUCCESS)
+       return result;
+ 
+-   int err = drmSyncobjWait(ctx->ws_dev->fd, &ctx->syncobj, 1,
+-                            INT64_MAX, 0, NULL);
++   int err = drmSyncobjWait(ctx->ws_dev->fd,
++                            &ctx->syncobj, 1, INT64_MAX,
++                            DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
++                            NULL);
+    if (err) {
+       return vk_errorf(log_obj, VK_ERROR_UNKNOWN,
+                        "DRM_SYNCOBJ_WAIT failed: %m");
+-- 
+GitLab
+
+From 63263baeca4d46141afcbaaf29b6f5e049875d19 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 22 Aug 2025 16:04:44 -0400
+Subject: [PATCH REVERT 01/11] nak: Lower away ldcx when NAK_DEBUG=no_ugpr is set
+
+This is a REVERT patch for: nak: Lower away ldcx when NAK_DEBUG=no_ugpr is set
+
+Reviewed-by: Mel Henning <mhenning@darkrefraction.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/36995>
+---
+ src/nouveau/compiler/nak/api.rs                 |  5 -----
+ .../compiler/nak_nir_lower_non_uniform_ldcx.c   | 17 -----------------
+ src/nouveau/compiler/nak_private.h              |  1 -
+ 3 files changed, 23 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/api.rs b/src/nouveau/compiler/nak/api.rs
+index 33b7bcdf0aa22..c2599f731c8b5 100644
+--- a/src/nouveau/compiler/nak/api.rs
++++ b/src/nouveau/compiler/nak/api.rs
+@@ -107,11 +107,6 @@ pub extern "C" fn nak_should_print_nir() -> bool {
+     DEBUG.print()
+ }
+ 
+-#[no_mangle]
+-pub extern "C" fn nak_debug_no_ugpr() -> bool {
+-    DEBUG.no_ugpr()
+-}
+-
+ fn nir_options(dev: &nv_device_info) -> nir_shader_compiler_options {
+     let mut op: nir_shader_compiler_options = Default::default();
+ 
+diff --git a/src/nouveau/compiler/nak_nir_lower_non_uniform_ldcx.c b/src/nouveau/compiler/nak_nir_lower_non_uniform_ldcx.c
+index 3b3852b4d924b..87b69ae87a5a4 100644
+--- a/src/nouveau/compiler/nak_nir_lower_non_uniform_ldcx.c
++++ b/src/nouveau/compiler/nak_nir_lower_non_uniform_ldcx.c
+@@ -72,17 +72,6 @@ lower_ldcx_to_global(nir_builder *b, nir_intrinsic_instr *load,
+    nir_def_replace(&load->def, val);
+ }
+ 
+-static bool
+-lower_all_ldcx_to_global_intrin(nir_builder *b, nir_intrinsic_instr *load,
+-                                void *data)
+-{
+-   if (load->intrinsic != nir_intrinsic_ldcx_nv)
+-      return false;
+-
+-   lower_ldcx_to_global(b, load, data);
+-   return true;
+-}
+-
+ struct non_uniform_section {
+    nir_block *pred;
+    nir_block *succ;
+@@ -502,12 +491,6 @@ bool
+ nak_nir_lower_non_uniform_ldcx(nir_shader *nir,
+                                const struct nak_compiler *nak)
+ {
+-   /* If we don't have UGPRs, lower all of them. */
+-   if (nak_debug_no_ugpr()) {
+-      return nir_shader_intrinsics_pass(nir, lower_all_ldcx_to_global_intrin,
+-                                        nir_metadata_none, (void *)nak);
+-   }
+-
+    /* Real functions are going to make hash of this */
+    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+    nir_builder b = nir_builder_create(impl);
+diff --git a/src/nouveau/compiler/nak_private.h b/src/nouveau/compiler/nak_private.h
+index 13a43bc9fcc1e..3e965b385dda7 100644
+--- a/src/nouveau/compiler/nak_private.h
++++ b/src/nouveau/compiler/nak_private.h
+@@ -15,7 +15,6 @@ extern "C" {
+ #endif
+ 
+ bool nak_should_print_nir(void);
+-bool nak_debug_no_ugpr(void);
+ 
+ struct nak_compiler {
+    uint8_t sm;
+-- 
+GitLab
