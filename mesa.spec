@@ -308,8 +308,9 @@ drivers, inspecting GPU state, compiler tools, and more.
 # متابعة بقية خطوات %prep عادية
 ## -p1
 %autosetup -n  mesa-%{commit}   
-patch -R -p1 < rev.patch
 
+interdiff -q rev.patch /dev/null > rev1.patch
+patch -p1  < rev1.patch
 
 
 
