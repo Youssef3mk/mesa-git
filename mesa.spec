@@ -63,7 +63,10 @@ Release: 0.733.git%{shortcommit}%{?dist}
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
-Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+##Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+
+
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
  Patch0:     37671.patch
