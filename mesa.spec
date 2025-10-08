@@ -66,8 +66,7 @@ URL:            http://www.mesa3d.org
 Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
- Patch0:     rev.patch
-BuildRequires: patchutils
+ Patch0:     37671.patch
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
@@ -307,10 +306,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
-%autosetup -n  mesa-%{commit}   
-
-interdiff -q rev.patch /dev/null > rev1.patch
-patch -p1  < rev1.patch
+%autosetup -n  mesa-%{commit} -p1  
 
 
 
