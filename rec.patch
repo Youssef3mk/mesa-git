@@ -1,0 +1,223 @@
+From 5796b993c4e4ce574f1776280d879858ff6d92a4 Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Mon, 6 Oct 2025 23:27:20 +0200
+Subject: [PATCH 1/2] vulkan: increase MESA_VK_MAX_DISCARD_RECTANGLES
+
+Turing and newer Nvidia cards can work with up to 8 discard rectangles
+---
+ src/vulkan/runtime/vk_limits.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/vulkan/runtime/vk_limits.h b/src/vulkan/runtime/vk_limits.h
+index 50bfde0c0ebee..1cb02eabfe89e 100644
+--- a/src/vulkan/runtime/vk_limits.h
++++ b/src/vulkan/runtime/vk_limits.h
+@@ -75,7 +75,7 @@
+ 
+ #define MESA_VK_MAX_VIEWPORTS 16
+ #define MESA_VK_MAX_SCISSORS 16
+-#define MESA_VK_MAX_DISCARD_RECTANGLES 4
++#define MESA_VK_MAX_DISCARD_RECTANGLES 8
+ 
+ /* As of June 29, 2022, according to vulkan.gpuinfo.org, no reports list more
+  * than 16 samples for framebufferColorSampleCounts except one layer running
+-- 
+GitLab
+
+
+From e348047f513cf0d48594411d6c7a085241a00d1b Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Tue, 7 Oct 2025 12:28:54 +0200
+Subject: [PATCH 2/2] nvk: implement VK_EXT_discard_rectangles
+
+---
+ docs/features.txt                        |  2 +-
+ src/nouveau/vulkan/nvk_cmd_clear.c       | 12 ++++
+ src/nouveau/vulkan/nvk_cmd_draw.c        | 71 ++++++++++++++++++++++++
+ src/nouveau/vulkan/nvk_physical_device.c |  4 ++
+ src/nouveau/vulkan/nvk_private.h         |  1 +
+ 5 files changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/docs/features.txt b/docs/features.txt
+index 76f99f0e9fcc7..c55b427bf9ddc 100644
+--- a/docs/features.txt
++++ b/docs/features.txt
+@@ -612,7 +612,7 @@ Khronos extensions that are not part of any Vulkan version:
+   VK_EXT_device_generated_commands                      DONE (lvp, nvk/Turing+, radv/gfx8+)
+   VK_EXT_device_memory_report                           DONE (anv, radv, vn)
+   VK_EXT_direct_mode_display                            DONE (anv, hk, lvp, nvk, panvk, radv, tu, v3dv, vn)
+-  VK_EXT_discard_rectangles                             DONE (radv)
++  VK_EXT_discard_rectangles                             DONE (nvk, radv)
+   VK_EXT_display_control                                DONE (anv, hasvk, nvk, panvk, radv, tu)
+   VK_EXT_display_surface_counter                        DONE (anv, lvp, nvk, panvk, radv, tu, vn)
+   VK_EXT_dynamic_rendering_unused_attachments           DONE (anv, hk, lvp, nvk, radv, tu, vn)
+diff --git a/src/nouveau/vulkan/nvk_cmd_clear.c b/src/nouveau/vulkan/nvk_cmd_clear.c
+index b0c95b3ba5d7b..ee5487da970e6 100644
+--- a/src/nouveau/vulkan/nvk_cmd_clear.c
++++ b/src/nouveau/vulkan/nvk_cmd_clear.c
+@@ -135,6 +135,8 @@ nvk_CmdClearAttachments(VkCommandBuffer commandBuffer,
+                         const VkClearRect *pRects)
+ {
+    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
++   const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
++
+    struct nv_push *p = nvk_cmd_buffer_push(cmd, 2 + attachmentCount * 4);
+ 
+    P_IMMD(p, NV9097, SET_CLEAR_SURFACE_CONTROL, {
+@@ -144,6 +146,16 @@ nvk_CmdClearAttachments(VkCommandBuffer commandBuffer,
+       .use_viewport_clip0     = USE_VIEWPORT_CLIP0_FALSE,
+    });
+ 
++
++   /* VK_EXT_discard_rects don't influence clears */
++   if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_DR_ENABLE) || dyn->dr.enable) {
++      struct vk_dynamic_graphics_state *dyn =
++         &cmd->vk.dynamic_graphics_state;
++      P_IMMD(p, NV9097, SET_WINDOW_CLIP_ENABLE, V_FALSE);
++
++      BITSET_SET(dyn->dirty, MESA_VK_DYNAMIC_DR_ENABLE);
++   }
++
+    bool clear_depth = false, clear_stencil = false;
+    for (uint32_t i = 0; i < attachmentCount; i++) {
+       if (pAttachments[i].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+diff --git a/src/nouveau/vulkan/nvk_cmd_draw.c b/src/nouveau/vulkan/nvk_cmd_draw.c
+index 3d058a4d7f612..57f726d401a6a 100644
+--- a/src/nouveau/vulkan/nvk_cmd_draw.c
++++ b/src/nouveau/vulkan/nvk_cmd_draw.c
+@@ -690,6 +690,7 @@ void
+ nvk_cmd_buffer_begin_graphics(struct nvk_cmd_buffer *cmd,
+                               const VkCommandBufferBeginInfo *pBeginInfo)
+ {
++   const struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
+       struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
+       P_MTHD(p, NV9097, INVALIDATE_SAMPLER_CACHE_NO_WFI);
+@@ -703,6 +704,10 @@ nvk_cmd_buffer_begin_graphics(struct nvk_cmd_buffer *cmd,
+       P_IMMD(p, NVA097, INVALIDATE_SHADER_CACHES_NO_WFI, {
+          .constant = CONSTANT_TRUE,
+       });
++      if (dev->vk.enabled_extensions.EXT_discard_rectangles) {
++         struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
++         P_IMMD(p, NV9097, SET_WINDOW_CLIP_ENABLE, V_FALSE);
++      }
+    }
+ 
+    cmd->state.gfx.descriptors.flush_root = nvk_cmd_flush_gfx_root_desc;
+@@ -2075,6 +2080,71 @@ nvk_flush_vp_state(struct nvk_cmd_buffer *cmd)
+    }
+ }
+ 
++static uint32_t
++vk_to_nv9097_dr_mode(VkDiscardRectangleModeEXT vk_mode)
++{
++   STATIC_ASSERT(VK_DISCARD_RECTANGLE_MODE_INCLUSIVE_EXT ==
++                 NV9097_SET_WINDOW_CLIP_TYPE_V_INCLUSIVE);
++   STATIC_ASSERT(VK_DISCARD_RECTANGLE_MODE_EXCLUSIVE_EXT ==
++                 NV9097_SET_WINDOW_CLIP_TYPE_V_EXCLUSIVE);
++   assert(vk_mode <= NV9097_SET_WINDOW_CLIP_TYPE_V_EXCLUSIVE);
++   return vk_mode;
++}
++
++static void
++nvk_flush_dr_state(struct nvk_cmd_buffer *cmd)
++{
++   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
++
++   const struct vk_dynamic_graphics_state *dyn =
++      &cmd->vk.dynamic_graphics_state;
++
++   /* VK_EXT_discard_rectangles */
++   if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_DR_ENABLE)) {
++      struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
++      P_IMMD(p, NV9097, SET_WINDOW_CLIP_ENABLE, dyn->dr.enable);
++   }
++   if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_DR_MODE)) {
++      struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
++      P_IMMD(p, NV9097, SET_WINDOW_CLIP_TYPE, vk_to_nv9097_dr_mode(dyn->dr.mode));
++   }
++   if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_DR_RECTANGLES)) {
++      const uint32_t sr_max =
++         nvk_image_max_dimension(&pdev->info, VK_IMAGE_TYPE_2D);
++
++      struct nv_push *p =
++         nvk_cmd_buffer_push(cmd, 1 + 2 * NVK_MAX_DISCARD_RECTANGLES);
++
++      P_MTHD(p, NV9097, SET_WINDOW_CLIP_HORIZONTAL(0));
++      for (unsigned i = 0; i < NVK_MAX_DISCARD_RECTANGLES; i++) {
++         const bool is_rect_enabled = i < dyn->dr.rectangle_count;
++         uint32_t xmin = 0;
++         uint32_t xmax = 0;
++         uint32_t ymin = 0;
++         uint32_t ymax = 0;
++
++         if (is_rect_enabled) {
++            const VkRect2D *r = &dyn->dr.rectangles[i];
++
++            xmin = MIN2(sr_max, r->offset.x);
++            xmax = MIN2(sr_max, r->offset.x + r->extent.width);
++            ymin = MIN2(sr_max, r->offset.y);
++            ymax = MIN2(sr_max, r->offset.y + r->extent.height);
++         }
++
++         P_NV9097_SET_WINDOW_CLIP_HORIZONTAL(p, i, {
++            .xmin = xmin,
++            .xmax = xmax,
++         });
++         P_NV9097_SET_WINDOW_CLIP_VERTICAL(p, i, {
++            .ymin = ymin,
++            .ymax = ymax,
++         });
++      }
++   }
++}
++
+ static uint32_t
+ vk_to_nv9097_polygon_mode(VkPolygonMode vk_mode)
+ {
+@@ -3413,6 +3483,7 @@ nvk_cmd_flush_gfx_dynamic_state(struct nvk_cmd_buffer *cmd)
+    nvk_flush_ia_state(cmd);
+    nvk_flush_ts_state(cmd);
+    nvk_flush_vp_state(cmd);
++   nvk_flush_dr_state(cmd);
+    nvk_flush_rs_state(cmd);
+    nvk_flush_fsr_state(cmd);
+    nvk_flush_ms_state(cmd);
+diff --git a/src/nouveau/vulkan/nvk_physical_device.c b/src/nouveau/vulkan/nvk_physical_device.c
+index a47d8bdaef147..8e42a85d2edb9 100644
+--- a/src/nouveau/vulkan/nvk_physical_device.c
++++ b/src/nouveau/vulkan/nvk_physical_device.c
+@@ -214,6 +214,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
+       .EXT_descriptor_buffer = info->cls_eng3d >= MAXWELL_A,
+       .EXT_descriptor_indexing = true,
+       .EXT_device_generated_commands = info->cls_eng3d >= MAXWELL_B,
++      .EXT_discard_rectangles = true,
+ #ifdef VK_USE_PLATFORM_DISPLAY_KHR
+       .EXT_display_control = true,
+ #endif
+@@ -1016,6 +1017,9 @@ nvk_get_device_properties(const struct nvk_instance *instance,
+       /* VK_KHR_cooperative_matrix */
+       .cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT,
+ 
++      /* VK_KHR_discard_rectangles */
++      .maxDiscardRectangles = NVK_MAX_DISCARD_RECTANGLES,
++
+       /* VK_KHR_compute_shader_derivatives */
+       .meshAndTaskShaderDerivatives = false,
+ 
+diff --git a/src/nouveau/vulkan/nvk_private.h b/src/nouveau/vulkan/nvk_private.h
+index 18a08f6e03959..d39002a0793c5 100644
+--- a/src/nouveau/vulkan/nvk_private.h
++++ b/src/nouveau/vulkan/nvk_private.h
+@@ -29,6 +29,7 @@
+    (NVK_MAX_PUSH_DESCRIPTORS * NVK_MAX_DESCRIPTOR_SIZE)
+ #define NVK_SSBO_BOUNDS_CHECK_ALIGNMENT 4
+ #define NVK_MAX_MULTIVIEW_VIEW_COUNT 32
++#define NVK_MAX_DISCARD_RECTANGLES 8
+ 
+ #define NVK_SPARSE_ADDR_SPACE_SIZE (1ull << 39)
+ #define NVK_MAX_BUFFER_SIZE (1ull << 31)
+-- 
+GitLab
+
