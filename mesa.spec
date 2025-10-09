@@ -51,9 +51,9 @@
 %global with_mesa_tools 1
 %global with_xlib_lease 1
 
-%global commit 5395f5a513c4984143a8fbd90125e0116bb41d9c
+%global commit 505cc7cff1e5a42ac5912e9ead5bb6e96110aa44
 
-%global shortcommit 5395f5a5
+%global shortcommit 505cc7cf
 
 Name:           mesa
 Summary:        Mesa graphics libraries
