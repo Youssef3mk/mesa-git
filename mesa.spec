@@ -58,7 +58,7 @@
 Name:           mesa
 Summary:        Mesa graphics libraries
 Version:        25.3.1
-Release: 0.735.git%{shortcommit}%{?dist}
+Release: 0.736.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
@@ -70,6 +70,7 @@ Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.g
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
  Patch0:     37671.patch
+ Patch1:     rec.patch
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
