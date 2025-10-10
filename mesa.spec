@@ -72,7 +72,7 @@ Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
 # Patch0:     37671.patch
 # Patch1:     rec.patch
- Patch0:     kepfix.patch
+# Patch0:     kepfix.patch
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
@@ -312,7 +312,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
-%autosetup -n  mesa-%{commit} -p1  
+%autosetup -n  mesa-%{commit}   
 
 
 
