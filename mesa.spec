@@ -69,9 +69,9 @@ Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.ta
 
 Source1:        Mesa-MLAA-License-Clarification-Email.txt
 
- Patch0:     37671.patch
- Patch1:     rec.patch
- Patch2:     kepfix.patch
+# Patch0:     37671.patch
+# Patch1:     rec.patch
+ Patch0:     kepfix.patch
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
