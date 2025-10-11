@@ -64,15 +64,14 @@ Release: 0.741.git%{shortcommit}%{?dist}
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
-##Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+##Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 
 
-Source1:        Mesa-MLAA-License-Clarification-Email.txt
+
 
 # Patch0:     37671.patch
-# Patch1:     rec.patch
-# Patch0:     kepfix.patch
+
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
@@ -316,7 +315,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 
 
 
-cp %{SOURCE1} docs/
+
 
 
 %build
@@ -426,7 +425,7 @@ done
 popd
 
 %files filesystem
-%doc docs/Mesa-MLAA-License-Clarification-Email.txt
+
 %dir %{_libdir}/dri
 %dir %{_datadir}/drirc.d
 
