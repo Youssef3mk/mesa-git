@@ -70,7 +70,8 @@ Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.ta
 
 
 
-# Patch0:     37671.patch
+ Patch0:    in.patch
+ 
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -311,7 +312,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
-%autosetup -n  mesa-%{commit}   
+%autosetup -n  mesa-%{commit}   -p1
 
 
 
