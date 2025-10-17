@@ -1,0 +1,149 @@
+From b37e5ca8e2a9a5934f68f619258016a80a28a411 Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Mon, 28 Oct 2024 18:18:54 -0400
+Subject: [PATCH 1/2] nak: Use convert_alu_types in nak_nir_lower_tex
+
+---
+ src/nouveau/compiler/nak_nir_lower_tex.c | 18 +++++++-----------
+ 1 file changed, 7 insertions(+), 11 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak_nir_lower_tex.c b/src/nouveau/compiler/nak_nir_lower_tex.c
+index 41950acaba5bb..b4edf2f969a65 100644
+--- a/src/nouveau/compiler/nak_nir_lower_tex.c
++++ b/src/nouveau/compiler/nak_nir_lower_tex.c
+@@ -97,20 +97,16 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, const struct nak_compiler *nak)
+       } else {
+          arr_idx = nir_channel(b, coord, --coord_components);
+ 
+-         /* Everything but texelFetch takes a float index
+-          *
+-          * TODO: Use F2I.U32.RNE
+-          */
++         /* Everything but texelFetch takes a float index */
+          if (tex->op != nir_texop_txf && tex->op != nir_texop_txf_ms) {
+-            arr_idx = nir_fadd_imm(b, arr_idx, 0.5);
+-
+-            // TODO: Hardware seems to clamp negative values to zero for us
+-            // in f2u, but we still need this fmax for constant folding.
+-            arr_idx = nir_fmax(b, arr_idx, nir_imm_float(b, 0.0));
+-
+-            arr_idx = nir_f2u32(b, arr_idx);
++            arr_idx = nir_convert_alu_types(b, 32, arr_idx,
++                                            nir_type_float32,
++                                            nir_type_uint32,
++                                            nir_rounding_mode_rtne,
++                                            /* saturate */ true);
+          }
+ 
++         /* TODO: Make arr_idx a u16 if that simplifies shaders */
+          arr_idx = nir_umin(b, arr_idx, nir_imm_int(b, UINT16_MAX));
+       }
+    }
+-- 
+GitLab
+
+
+From 21c5495dcb6ad6ef3bf152c17e4d506da2ccab72 Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Mon, 23 Dec 2024 16:08:16 -0500
+Subject: [PATCH 2/2] nak,nir: Stop using std::mem::zeroed()
+
+We can replace all of these with safe alternatives if we ask bindgen for
+implementations of Default.
+---
+ src/compiler/rust/memstream.rs        | 2 +-
+ src/compiler/rust/meson.build         | 1 +
+ src/nouveau/compiler/meson.build      | 1 +
+ src/nouveau/compiler/nak/api.rs       | 6 +++---
+ src/nouveau/compiler/nak/hw_runner.rs | 4 ++--
+ 5 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/src/compiler/rust/memstream.rs b/src/compiler/rust/memstream.rs
+index 00adaa7151755..622f55b4b4798 100644
+--- a/src/compiler/rust/memstream.rs
++++ b/src/compiler/rust/memstream.rs
+@@ -23,7 +23,7 @@ pub struct MemStream(Pin<Box<MemStreamImpl>>);
+ impl MemStream {
+     pub fn new() -> io::Result<Self> {
+         let mut stream_impl = Box::pin(MemStreamImpl {
+-            stream: unsafe { std::mem::zeroed() },
++            stream: Default::default(),
+             buffer: std::ptr::null_mut(),
+             buffer_size: 0,
+             _pin: PhantomPinned,
+diff --git a/src/compiler/rust/meson.build b/src/compiler/rust/meson.build
+index 2f4a4728d62a9..98f1a93291a56 100644
+--- a/src/compiler/rust/meson.build
++++ b/src/compiler/rust/meson.build
+@@ -47,6 +47,7 @@ _compiler_bindgen_args = [
+   '--allowlist-function', 'u_memstream.*',
+   '--allowlist-type', 'u_memstream',
+   '--no-prepend-enum-name',
++  '--with-derive-default',
+ ]
+ 
+ foreach type : _compiler_binding_types
+diff --git a/src/nouveau/compiler/meson.build b/src/nouveau/compiler/meson.build
+index 7a4c60b18b2b4..76b15edc07339 100644
+--- a/src/nouveau/compiler/meson.build
++++ b/src/nouveau/compiler/meson.build
+@@ -66,6 +66,7 @@ _nak_bindings_rs = rust.bindgen(
+     '--allowlist-function', 'nak_.*',
+     '--allowlist-function', 'nouveau_ws_.*',
+     '--no-prepend-enum-name',
++    '--with-derive-default',
+   ],
+   dependencies : [
+     dep_libdrm,
+diff --git a/src/nouveau/compiler/nak/api.rs b/src/nouveau/compiler/nak/api.rs
+index 3d41a9c59c9a2..9b381ab0eb660 100644
+--- a/src/nouveau/compiler/nak/api.rs
++++ b/src/nouveau/compiler/nak/api.rs
+@@ -108,7 +108,7 @@ pub extern "C" fn nak_should_print_nir() -> bool {
+ }
+ 
+ fn nir_options(dev: &nv_device_info) -> nir_shader_compiler_options {
+-    let mut op: nir_shader_compiler_options = unsafe { std::mem::zeroed() };
++    let mut op: nir_shader_compiler_options = Default::default();
+ 
+     op.lower_fdiv = true;
+     op.fuse_ffma16 = true;
+@@ -319,11 +319,11 @@ impl ShaderBin {
+                     xfb: if let Some(xfb) = &io.xfb {
+                         **xfb
+                     } else {
+-                        unsafe { std::mem::zeroed() }
++                        Default::default()
+                     },
+                     _pad: Default::default(),
+                 },
+-                _ => unsafe { std::mem::zeroed() },
++                _ => Default::default(),
+             },
+             hdr: sph::encode_header(sm, info, fs_key),
+         };
+diff --git a/src/nouveau/compiler/nak/hw_runner.rs b/src/nouveau/compiler/nak/hw_runner.rs
+index 06f9686ce203f..1ad725e676f52 100644
+--- a/src/nouveau/compiler/nak/hw_runner.rs
++++ b/src/nouveau/compiler/nak/hw_runner.rs
+@@ -46,7 +46,7 @@ struct DrmDevices {
+ impl DrmDevices {
+     fn get() -> io::Result<Self> {
+         unsafe {
+-            let mut devices: [drmDevicePtr; 16] = std::mem::zeroed();
++            let mut devices: [drmDevicePtr; 16] = [std::ptr::null_mut(); 16];
+             let num_devices = drmGetDevices(
+                 devices.as_mut_ptr(),
+                 devices.len().try_into().unwrap(),
+@@ -465,7 +465,7 @@ impl<'a> Runner {
+         );
+ 
+         // Populate and upload the QMD
+-        let mut qmd_cbufs: [nak_qmd_cbuf; 8] = unsafe { std::mem::zeroed() };
++        let mut qmd_cbufs: [nak_qmd_cbuf; 8] = Default::default();
+         qmd_cbufs[0] = nak_qmd_cbuf {
+             index: 0,
+             size: std::mem::size_of::<CB0>()
+-- 
+GitLab
+

@@ -1,0 +1,73 @@
+From 21915a2c1a55db00421449321a235e5518ce7476 Mon Sep 17 00:00:00 2001
+From: Karol Herbst <kherbst@redhat.com>
+Date: Fri, 17 Oct 2025 18:34:53 +0200
+Subject: [PATCH] nak: ensure deref has a ptr_stride in cmat load/store
+ lowering
+
+With untyped pointer we might get a deref_cast with a 0 ptr_stride and
+because we already manually calculate offsets of matrix elements, might as
+well just put a proper ptr_stride on it.
+
+Closes: https://gitlab.freedesktop.org/mesa/mesa/-/issues/14100
+---
+ src/nouveau/compiler/nak_nir_lower_cmat.c | 28 ++++++++++-------------
+ 1 file changed, 12 insertions(+), 16 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak_nir_lower_cmat.c b/src/nouveau/compiler/nak_nir_lower_cmat.c
+index 313a7f540613f..547ee36a58aff 100644
+--- a/src/nouveau/compiler/nak_nir_lower_cmat.c
++++ b/src/nouveau/compiler/nak_nir_lower_cmat.c
+@@ -701,19 +701,17 @@ lower_cmat_load(nir_builder *b, nir_intrinsic_instr *intr)
+                               &col_offset, &row_offset);
+ 
+       row_offset = nir_imul(b, row_offset, stride);
++      row_offset = nir_imul_imm(b, row_offset, glsl_get_vector_elements(deref->type));
+ 
+-      col_offset = nir_u2uN(b, col_offset, deref->def.bit_size);
+-      row_offset = nir_u2uN(b, row_offset, deref->def.bit_size);
++      nir_def *offset = nir_iadd(b, row_offset, col_offset);
++      offset = nir_u2uN(b, offset, deref->def.bit_size);
+ 
+-      nir_deref_instr *iter_deref =
+-         nir_build_deref_ptr_as_array(b, deref, row_offset);
+-      iter_deref = nir_build_deref_cast(
+-         b, &iter_deref->def, deref->modes,
++      nir_deref_instr *iter_deref = nir_build_deref_cast(
++         b, &deref->def, deref->modes,
+          glsl_scalar_type(desc.element_type),
+          glsl_base_type_bit_size(desc.element_type) / 8);
+-      iter_deref =
+-         nir_build_deref_ptr_as_array(b, iter_deref, col_offset);
+ 
++      iter_deref = nir_build_deref_ptr_as_array(b, iter_deref, offset);
+       vars[idx] = nir_load_deref(b, iter_deref);
+    }
+ 
+@@ -787,18 +785,16 @@ lower_cmat_instr(nir_builder *b,
+                                 &col_offset, &row_offset);
+ 
+          row_offset = nir_imul(b, row_offset, stride);
++         row_offset = nir_imul_imm(b, row_offset, glsl_get_vector_elements(deref->type));
+ 
+-         col_offset = nir_u2uN(b, col_offset, deref->def.bit_size);
+-         row_offset = nir_u2uN(b, row_offset, deref->def.bit_size);
++         nir_def *offset = nir_iadd(b, row_offset, col_offset);
++         offset = nir_u2uN(b, offset, deref->def.bit_size);
+ 
+-         nir_deref_instr *iter_deref =
+-            nir_build_deref_ptr_as_array(b, deref, row_offset);
+-         iter_deref = nir_build_deref_cast(
+-            b, &iter_deref->def, deref->modes,
++         nir_deref_instr *iter_deref = nir_build_deref_cast(
++            b, &deref->def, deref->modes,
+             glsl_scalar_type(desc.element_type),
+             glsl_base_type_bit_size(desc.element_type) / 8);
+-         iter_deref =
+-            nir_build_deref_ptr_as_array(b, iter_deref, col_offset);
++         iter_deref = nir_build_deref_ptr_as_array(b, iter_deref, offset);
+ 
+          nir_store_deref(b, iter_deref, vars[idx], 1);
+       }
+-- 
+GitLab
+

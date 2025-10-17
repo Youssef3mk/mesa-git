@@ -1,0 +1,271 @@
+From 32a930885cf7edf9c852252a804f9718f59986c7 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 8 Aug 2025 16:16:02 -0400
+Subject: [PATCH 1/4] nvk/indirect: Do different flushes for 3D vs compute
+
+There's no point in invalidating SKED caches for 3D indirects.
+---
+ src/nouveau/vulkan/nvk_cmd_indirect.c | 21 +++++++++++++++------
+ 1 file changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_indirect.c b/src/nouveau/vulkan/nvk_cmd_indirect.c
+index c3b040021efd0..1c3bcd380aa54 100644
+--- a/src/nouveau/vulkan/nvk_cmd_indirect.c
++++ b/src/nouveau/vulkan/nvk_cmd_indirect.c
+@@ -1035,12 +1035,21 @@ nvk_CmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
+          .constant = CONSTANT_TRUE,
+          .flush_data = FLUSH_DATA_TRUE,
+       });
+-      if (pdev->info.cls_eng3d >= MAXWELL_COMPUTE_B)
+-         P_IMMD(p, NVB1C0, INVALIDATE_SKED_CACHES, 0);
+-      if (pdev->info.cls_eng3d >= HOPPER_A)
+-         P_IMMD(p, NVC86F, WFI, 0);
+-      else
+-         __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
++
++      if (layout->stages & VK_SHADER_STAGE_COMPUTE_BIT) {
++         assert(info->shaderStages == VK_SHADER_STAGE_COMPUTE_BIT);
++         P_IMMD(p, NVA0C0, WAIT_FOR_IDLE, 0);
++         if (pdev->info.cls_eng3d >= MAXWELL_COMPUTE_B)
++            P_IMMD(p, NVB1C0, INVALIDATE_SKED_CACHES, 0);
++      } else if (layout->stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
++         assert(!(layout->stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
++         if (pdev->info.cls_eng3d >= HOPPER_A)
++            P_IMMD(p, NVC86F, WFI, 0);
++         else
++            __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
++      } else {
++         UNREACHABLE("Unknown shader stage");
++      }
+    }
+ 
+    if (layout->stages & VK_SHADER_STAGE_COMPUTE_BIT) {
+-- 
+GitLab
+
+
+From ede8a1ee1e036bb10ea41627143a0a3309075af3 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 8 Aug 2025 16:25:11 -0400
+Subject: [PATCH 2/4] nvk: Drop the NOP from BeginCommandBuffer()
+
+We needed this back when we were on the old uAPI and we had to actually
+submit at least something.  Now that we have the new uAPI and NVKMD,
+empty command buffers should be just fine.
+---
+ src/nouveau/vulkan/nvk_cmd_buffer.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.c b/src/nouveau/vulkan/nvk_cmd_buffer.c
+index 364fc4c79c563..b8159fb92da64 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.c
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
+@@ -377,11 +377,6 @@ nvk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+ 
+    nvk_reset_cmd_buffer(&cmd->vk, 0);
+ 
+-   /* Start with a nop so we have at least something to submit */
+-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
+-   P_MTHD(p, NV90B5, NOP);
+-   P_NV90B5_NOP(p, 0);
+-
+    if (queue_flags & VK_QUEUE_COMPUTE_BIT)
+       nvk_cmd_buffer_begin_compute(cmd, pBeginInfo);
+ 
+-- 
+GitLab
+
+
+From 12439d165af12db7f3ec10b53561f2226ed38784 Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 8 Aug 2025 16:39:38 -0400
+Subject: [PATCH 3/4] nvk: Mark the indirect push incomplete in
+ CmdDispatchIndirect()
+
+Pre-Turing, the macro takes its first couple arguments from an indirect
+push and then more arguments from a direct push.  This means the
+indirect needs to get marked incomplete or NVKMD may split between the
+indirect and the direct, breaking the macro.  Also, we weren't setting
+the parameter count on the CALL_MME_MACRO correctly.
+
+Fixes: b8aeea806a83 ("nvk: implement vkCmdDispatchIndirect on pre-turing")
+---
+ src/nouveau/vulkan/nvk_cmd_buffer.c   |  4 +++-
+ src/nouveau/vulkan/nvk_cmd_buffer.h   |  3 ++-
+ src/nouveau/vulkan/nvk_cmd_dispatch.c |  6 ++++--
+ src/nouveau/vulkan/nvk_cmd_draw.c     | 10 +++++-----
+ src/nouveau/vulkan/nvk_cmd_indirect.c |  2 +-
+ 5 files changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.c b/src/nouveau/vulkan/nvk_cmd_buffer.c
+index b8159fb92da64..a9cbc1573dbbb 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.c
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
+@@ -211,13 +211,15 @@ nvk_cmd_buffer_new_push(struct nvk_cmd_buffer *cmd)
+ 
+ void
+ nvk_cmd_buffer_push_indirect(struct nvk_cmd_buffer *cmd,
+-                             uint64_t addr, uint32_t range)
++                             uint64_t addr, uint32_t range,
++                             bool incomplete)
+ {
+    nvk_cmd_buffer_flush_push(cmd, true);
+ 
+    struct nvk_cmd_push push = {
+       .addr = addr,
+       .range = range,
++      .incomplete = incomplete,
+       .no_prefetch = true,
+    };
+ 
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.h b/src/nouveau/vulkan/nvk_cmd_buffer.h
+index 25f9bf48c7162..6d0fe67a7bda3 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.h
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.h
+@@ -276,7 +276,8 @@ nvk_cmd_buffer_push(struct nvk_cmd_buffer *cmd, uint32_t dw_count)
+ 
+ void
+ nvk_cmd_buffer_push_indirect(struct nvk_cmd_buffer *cmd,
+-                             uint64_t addr, uint32_t dw_count);
++                             uint64_t addr, uint32_t dw_count,
++                             bool incomplete);
+ 
+ void nvk_cmd_buffer_begin_graphics(struct nvk_cmd_buffer *cmd,
+                                    const VkCommandBufferBeginInfo *pBeginInfo);
+diff --git a/src/nouveau/vulkan/nvk_cmd_dispatch.c b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+index e69417c435ab3..5f69b49d5d699 100644
+--- a/src/nouveau/vulkan/nvk_cmd_dispatch.c
++++ b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+@@ -579,8 +579,10 @@ nvk_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
+       }
+ 
+       P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_DISPATCH_INDIRECT));
+-      nv_push_update_count(p, sizeof(VkDispatchIndirectCommand) / 4);
+-      nvk_cmd_buffer_push_indirect(cmd, dispatch_addr, sizeof(VkDispatchIndirectCommand));
++      nv_push_update_count(p, sizeof(VkDispatchIndirectCommand) / 4 + 5);
++      nvk_cmd_buffer_push_indirect(cmd, dispatch_addr,
++                                   sizeof(VkDispatchIndirectCommand),
++                                   true /* incomplete */);
+       p = nvk_cmd_buffer_push(cmd, 9);
+       P_INLINE_DATA(p, root_desc_addr >> 32);
+       P_INLINE_DATA(p, root_desc_addr);
+diff --git a/src/nouveau/vulkan/nvk_cmd_draw.c b/src/nouveau/vulkan/nvk_cmd_draw.c
+index e534c3db3a337..3959385182ea0 100644
+--- a/src/nouveau/vulkan/nvk_cmd_draw.c
++++ b/src/nouveau/vulkan/nvk_cmd_draw.c
+@@ -3590,7 +3590,7 @@ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
+                P_INLINE_DATA(p, g | (c << 4));
+ 
+                nv_push_update_count(p, 3);
+-               nvk_cmd_buffer_push_indirect(cmd, desc_addr, 12);
++               nvk_cmd_buffer_push_indirect(cmd, desc_addr, 12, false);
+             }
+          }
+       }
+@@ -4350,7 +4350,7 @@ nvk_CmdDrawIndirect(VkCommandBuffer commandBuffer,
+ 
+          uint64_t range = count * (uint64_t)stride;
+          nv_push_update_count(p, range / 4);
+-         nvk_cmd_buffer_push_indirect(cmd, draw_addr, range);
++         nvk_cmd_buffer_push_indirect(cmd, draw_addr, range, false);
+ 
+          draw_addr += range;
+          drawCount -= count;
+@@ -4450,7 +4450,7 @@ nvk_CmdDrawIndexedIndirect(VkCommandBuffer commandBuffer,
+ 
+          uint64_t range = count * (uint64_t)stride;
+          nv_push_update_count(p, range / 4);
+-         nvk_cmd_buffer_push_indirect(cmd, draw_addr, range);
++         nvk_cmd_buffer_push_indirect(cmd, draw_addr, range, false);
+ 
+          draw_addr += range;
+          drawCount -= count;
+@@ -4696,7 +4696,7 @@ nvk_CmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
+       P_INLINE_DATA(p, instanceCount);
+       P_INLINE_DATA(p, firstInstance);
+       nv_push_update_count(p, 1);
+-      nvk_cmd_buffer_push_indirect(cmd, counter_addr, 4);
++      nvk_cmd_buffer_push_indirect(cmd, counter_addr, 4, false);
+    }
+ }
+ 
+@@ -4794,7 +4794,7 @@ nvk_CmdBeginTransformFeedbackEXT(VkCommandBuffer commandBuffer,
+          P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_XFB_COUNTER_LOAD));
+          P_INLINE_DATA(p, cb_idx);
+          nv_push_update_count(p, 1);
+-         nvk_cmd_buffer_push_indirect(cmd, cb_addr, 4);
++         nvk_cmd_buffer_push_indirect(cmd, cb_addr, 4, false);
+       }
+    }
+ }
+diff --git a/src/nouveau/vulkan/nvk_cmd_indirect.c b/src/nouveau/vulkan/nvk_cmd_indirect.c
+index 1c3bcd380aa54..9f61e555ae6d9 100644
+--- a/src/nouveau/vulkan/nvk_cmd_indirect.c
++++ b/src/nouveau/vulkan/nvk_cmd_indirect.c
+@@ -1119,7 +1119,7 @@ nvk_CmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
+    while (seq_count > 0) {
+       uint32_t push_seq = MIN2(seq_count, max_seq_per_push);
+       uint32_t push_size_B = push_seq * layout->cmd_seq_stride_B;
+-      nvk_cmd_buffer_push_indirect(cmd, addr, push_size_B);
++      nvk_cmd_buffer_push_indirect(cmd, addr, push_size_B, false);
+       addr += push_size_B;
+       seq_count -= push_seq;
+    }
+-- 
+GitLab
+
+
+From 9b9b271be848484d4a693af54eddc55c3d0da16a Mon Sep 17 00:00:00 2001
+From: Faith Ekstrand <faith.ekstrand@collabora.com>
+Date: Fri, 8 Aug 2025 17:02:27 -0400
+Subject: [PATCH 4/4] nvk: Split up the pushes in CmdDispatchIndirect()
+
+We go through way too much work to avoid one extra push.
+---
+ src/nouveau/vulkan/nvk_cmd_dispatch.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_dispatch.c b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+index 5f69b49d5d699..7935b6477890f 100644
+--- a/src/nouveau/vulkan/nvk_cmd_dispatch.c
++++ b/src/nouveau/vulkan/nvk_cmd_dispatch.c
+@@ -556,9 +556,8 @@ nvk_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
+       return;
+    }
+ 
+-   struct nv_push *p;
+    if (nvk_cmd_buffer_compute_cls(cmd) >= TURING_COMPUTE_A) {
+-      p = nvk_cmd_buffer_push(cmd, 14);
++      struct nv_push *p = nvk_cmd_buffer_push(cmd, 10);
+       if (nvk_cmd_buffer_compute_cls(cmd) < BLACKWELL_COMPUTE_A)
+          P_IMMD(p, NVC597, SET_MME_DATA_FIFO_CONFIG, FIFO_SIZE_SIZE_4KB);
+       P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_DISPATCH_INDIRECT));
+@@ -570,7 +569,7 @@ nvk_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
+       P_INLINE_DATA(p, qmd_addr);
+       P_INLINE_DATA(p, nvk_compute_local_size(cmd));
+    } else {
+-      p = nvk_cmd_buffer_push(cmd, 5);
++      struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
+       /* Stall the command streamer */
+       if (pdev->info.cls_compute >= HOPPER_COMPUTE_A) {
+          P_IMMD(p, NVC86F, WFI, 0);
+@@ -583,7 +582,7 @@ nvk_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
+       nvk_cmd_buffer_push_indirect(cmd, dispatch_addr,
+                                    sizeof(VkDispatchIndirectCommand),
+                                    true /* incomplete */);
+-      p = nvk_cmd_buffer_push(cmd, 9);
++      p = nvk_cmd_buffer_push(cmd, 5);
+       P_INLINE_DATA(p, root_desc_addr >> 32);
+       P_INLINE_DATA(p, root_desc_addr);
+       P_INLINE_DATA(p, qmd_addr >> 32);
+@@ -591,6 +590,7 @@ nvk_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
+       P_INLINE_DATA(p, nvk_compute_local_size(cmd));
+    }
+ 
++   struct nv_push *p = nvk_cmd_buffer_push(cmd, 4);
+    P_MTHD(p, NVA0C0, SEND_PCAS_A);
+    P_NVA0C0_SEND_PCAS_A(p, qmd_addr >> 8);
+    if (nvk_cmd_buffer_compute_cls(cmd) <= TURING_COMPUTE_A) {
+-- 
+GitLab
+
