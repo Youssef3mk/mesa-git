@@ -1,0 +1,164 @@
+From 5c1b18c4a2dc4e965c83a3b4b3489384ba25d68d Mon Sep 17 00:00:00 2001
+From: Dave Airlie <airlied@redhat.com>
+Date: Thu, 13 Mar 2025 14:30:43 +1000
+Subject: [PATCH] nak: add a opt zero pass
+
+this makes consecutive rZ into cs2r
+
+Totals:
+CodeSize: 12210992 -> 12179296 (-0.26%)
+Static cycle count: 3836846 -> 3841636 (+0.12%); split: -0.02%, +0.14%
+
+Totals from 339 (25.76% of 1316) affected shaders:
+CodeSize: 8373424 -> 8341728 (-0.38%)
+Static cycle count: 2912329 -> 2917119 (+0.16%); split: -0.02%, +0.19%
+
+ PERCENTAGE DELTAS                      Shaders  CodeSize Static cycle count
+ google-meet-clvk/BgBlur                49        -0.31%        +0.31%
+ google-meet-clvk/Relight               81        -0.28%        +0.31%
+ parallel-rdp/small_subgroup            245       -0.09%        +0.20%
+ parallel-rdp/small_uber_subgroup       54        -0.28%        -0.03%
+ parallel-rdp/subgroup                  326       -0.39%        +0.48%
+ parallel-rdp/uber_subgroup             54        -0.32%        -0.04%
+ q2rtx/q2rtx-rt-pipeline                33        -0.18%        +0.17%
+ sascha-willems/bloom                   12        -0.08%        +0.20%
+ sascha-willems/computecloth            7         -0.59%        +0.81%
+ sascha-willems/computenbody            6         -1.09%        +0.58%
+ sascha-willems/computeraytracing       5         -0.57%        +0.84%
+ sascha-willems/deferredmultisampling   10        -0.16%        +0.46%
+---
+ src/nouveau/compiler/nak/api.rs      |  1 +
+ src/nouveau/compiler/nak/ir.rs       |  5 +-
+ src/nouveau/compiler/nak/lib.rs      |  1 +
+ src/nouveau/compiler/nak/opt_zero.rs | 79 ++++++++++++++++++++++++++++
+ 4 files changed, 85 insertions(+), 1 deletion(-)
+ create mode 100644 src/nouveau/compiler/nak/opt_zero.rs
+
+diff --git a/src/nouveau/compiler/nak/api.rs b/src/nouveau/compiler/nak/api.rs
+index c2599f731c8b5..0b88c2dd11bd4 100644
+--- a/src/nouveau/compiler/nak/api.rs
++++ b/src/nouveau/compiler/nak/api.rs
+@@ -456,6 +456,7 @@ fn nak_compile_shader_internal(
+     pass!(s, assign_regs);
+     pass!(s, lower_par_copies);
+     pass!(s, lower_copy_swap);
++    pass!(s, opt_zero);
+     if nak.sm >= 70 {
+         pass!(s, opt_jump_thread);
+     } else {
+diff --git a/src/nouveau/compiler/nak/ir.rs b/src/nouveau/compiler/nak/ir.rs
+index a0ea5106181a8..0c566456bc545 100644
+--- a/src/nouveau/compiler/nak/ir.rs
++++ b/src/nouveau/compiler/nak/ir.rs
+@@ -6862,7 +6862,10 @@ pub struct OpCS2R {
+ 
+ impl DisplayOp for OpCS2R {
+     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "cs2r sr[{:#x}]", self.idx)
++        match self.idx {
++            255 => write!(f, "cs2r srz"),
++            _ => write!(f, "cs2r sr[{:#x}]", self.idx)
++        }
+     }
+ }
+ impl_display_for_op!(OpCS2R);
+diff --git a/src/nouveau/compiler/nak/lib.rs b/src/nouveau/compiler/nak/lib.rs
+index fb6517bb061d9..c7d2244cb27d7 100644
+--- a/src/nouveau/compiler/nak/lib.rs
++++ b/src/nouveau/compiler/nak/lib.rs
+@@ -24,6 +24,7 @@ mod opt_lop;
+ mod opt_out;
+ mod opt_prmt;
+ mod opt_uniform_instrs;
++mod opt_zero;
+ mod qmd;
+ mod reg_tracker;
+ mod repair_ssa;
+diff --git a/src/nouveau/compiler/nak/opt_zero.rs b/src/nouveau/compiler/nak/opt_zero.rs
+new file mode 100644
+index 0000000000000..76531730e6de3
+--- /dev/null
++++ b/src/nouveau/compiler/nak/opt_zero.rs
+@@ -0,0 +1,79 @@
++// Copyright © 2025 Red Hat.
++// SPDX-License-Identifier: MIT
++
++use crate::{
++    api::{GetDebugFlags, DEBUG},
++    ir::*,
++};
++
++fn try_zero(prev: &mut Instr, this: &Instr) -> Option<RegRef> {
++    let Op::Mov(_prev_op) = &mut prev.op else {
++        return None;
++    };
++    let Op::Mov(_this_op) = &this.op else {
++        return None;
++    };
++
++    if !prev.srcs()[0].is_zero() || !this.srcs()[0].is_zero() {
++        return None;
++    }
++
++    let prev_reg = match prev.dsts()[0].as_reg() {
++        Some(r) => r,
++        None => { return None; }
++    };
++
++    let this_reg = match this.dsts()[0].as_reg() {
++        Some(r) => r,
++        None => { return None; }
++    };
++
++    if this_reg.file() != RegFile::GPR {
++        return None;
++    }
++
++    if prev_reg.file() != this_reg.file() {
++        return None;
++    }
++
++    if prev_reg.base_idx() & 0x1 == 0x1 {
++        return None;
++    }
++
++    if prev_reg.base_idx() != this_reg.base_idx() - 1 {
++        return None;
++    }
++
++    Some(RegRef::new(prev_reg.file(), prev_reg.base_idx(), 2))
++}
++
++impl Shader<'_> {
++    pub fn opt_zero(&mut self) {
++        for f in &mut self.functions {
++            for b in &mut f.blocks {
++                let mut instrs: Vec<Box<Instr>> = Vec::new();
++                for instr in b.instrs.drain(..) {
++                    if let Some(prev) = instrs.last_mut() {
++                        match try_zero(prev, &instr) {
++                            Some(regref) => {
++                                instrs.pop();
++                                instrs.push(Instr::new_boxed(OpCS2R {
++                                    dst: regref.into(), idx: 255
++                                }));
++                                if DEBUG.annotate() {
++                                    instrs.push(Instr::new_boxed(OpAnnotate {
++                                        annotation: "combined by opt_zero".into(),
++                                    }));
++                                }
++                                continue;
++                            },
++                            None => {}
++                        }
++                    }
++                    instrs.push(instr);
++                }
++                b.instrs = instrs;
++            }
++        }
++    }
++}
+-- 
+GitLab
+
