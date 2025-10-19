@@ -70,10 +70,10 @@ Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.ta
 
 
 
-## Patch0:    p.patch
-Patch0:    s.patch
-Patch1:    6.patch
- Patch2:    f.patch
+Patch0:    k3.patch
+##Patch0:    s.patch
+##Patch1:    6.patch
+## Patch2:    f.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
