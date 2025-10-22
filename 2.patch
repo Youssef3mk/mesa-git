@@ -1,0 +1,138 @@
+From d8270636fc8026bba891ff3854314d0e2cf8b1e2 Mon Sep 17 00:00:00 2001
+From: Karol Herbst <kherbst@redhat.com>
+Date: Wed, 22 Oct 2025 12:54:12 +0200
+Subject: [PATCH] nak/cmat: add optimisation to cmat load/store to do 32-bit
+ load for f16vec2
+
+Initial idea and code from Dave, but this is a complete rewrite of the
+patch.
+
+The Matrix layouts contain groups of values, for int8 we have vec4 groups,
+for fp16, fp32 and int32 we have vec2s. With this we load and store them
+as vectors getting rid of a bunch of address calculation.
+---
+ src/nouveau/compiler/nak_nir_lower_cmat.c | 76 +++++++++++++++++++++--
+ 1 file changed, 72 insertions(+), 4 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak_nir_lower_cmat.c b/src/nouveau/compiler/nak_nir_lower_cmat.c
+index 1e4c1e267bf1a..0c23dadeba0db 100644
+--- a/src/nouveau/compiler/nak_nir_lower_cmat.c
++++ b/src/nouveau/compiler/nak_nir_lower_cmat.c
+@@ -671,6 +671,28 @@ try_lower_cmat_load_to_ldsm(nir_builder *b, nir_intrinsic_instr *intr)
+                                      .matrix_layout = layout);
+ }
+ 
++/**
++ * Returns the possibly vectorization width we can use to load/store matrices
++ * of the given cmat desc and layout
++ */
++static int load_store_get_vec_size(const struct glsl_cmat_description desc,
++                                   enum glsl_matrix_layout layout)
++{
++   if ((desc.use != GLSL_CMAT_USE_B && layout != GLSL_MATRIX_LAYOUT_ROW_MAJOR) ||
++       (desc.use == GLSL_CMAT_USE_B && layout != GLSL_MATRIX_LAYOUT_COLUMN_MAJOR))
++      return 1;
++
++   switch (glsl_base_type_bit_size(desc.element_type)) {
++   case 16:
++   case 32:
++      return 2;
++   case  8:
++      return 4;
++   default:
++      return 1;
++   }
++}
++
+ static nir_deref_instr*
+ get_cmat_component_deref(nir_builder *b, nir_intrinsic_instr *intr,
+                          nir_def *lane_id, unsigned idx)
+@@ -718,6 +740,7 @@ lower_cmat_load(nir_builder *b, nir_intrinsic_instr *intr)
+    }
+ 
+    const struct glsl_cmat_description desc = cmat_src_desc(intr->src[0]);
++   const enum glsl_matrix_layout layout = nir_intrinsic_matrix_layout(intr);
+    const unsigned length = get_cmat_length(desc);
+ 
+    nir_def *vars[NIR_MAX_VEC_COMPONENTS];
+@@ -726,10 +749,37 @@ lower_cmat_load(nir_builder *b, nir_intrinsic_instr *intr)
+ 
+    nir_def *lane_id = nir_load_subgroup_invocation(b);
+ 
+-   for (unsigned idx = 0; idx < length; idx++) {
++   int vec_size = load_store_get_vec_size(desc, layout);
++   for (unsigned idx = 0; idx < length; idx += vec_size) {
+       nir_deref_instr *iter_deref =
+          get_cmat_component_deref(b, intr, lane_id, idx);
+-      vars[idx] = nir_load_deref(b, iter_deref);
++      unsigned bit_size = glsl_get_bit_size(iter_deref->type);
++      nir_variable_mode modes = iter_deref->modes;
++
++      if (vec_size != 1 && vec_size * bit_size == 32)
++         iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
++                                              glsl_uint_type(), 4);
++      else if (vec_size != 1 && vec_size * bit_size == 64)
++         iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
++                                              glsl_uint64_t_type(), 8);
++
++      nir_def *value = nir_load_deref(b, iter_deref);
++      if (vec_size == 4) {
++         value = nir_unpack_32_4x8(b, value);
++         vars[idx] = nir_channel(b, value, 0);
++         vars[idx + 1] = nir_channel(b, value, 1);
++         vars[idx + 2] = nir_channel(b, value, 2);
++         vars[idx + 3] = nir_channel(b, value, 3);
++      } else if (vec_size == 2) {
++         if (value->bit_size == 64)
++            value = nir_unpack_64_2x32(b, value);
++         else
++            value = nir_unpack_32_2x16(b, value);
++         vars[idx] = nir_channel(b, value, 0);
++         vars[idx + 1] = nir_channel(b, value, 1);
++      } else {
++         vars[idx] = value;
++      }
+    }
+ 
+    nir_def *mat = nir_vec(b, vars, length);
+@@ -780,6 +830,7 @@ lower_cmat_instr(nir_builder *b,
+ 
+    case nir_intrinsic_cmat_store: {
+       const struct glsl_cmat_description desc = cmat_src_desc(intr->src[1]);
++      const enum glsl_matrix_layout layout = nir_intrinsic_matrix_layout(intr);
+       const unsigned length = get_cmat_length(desc);
+       nir_def *src = load_cmat_src(b, intr->src[1]);
+ 
+@@ -789,10 +840,27 @@ lower_cmat_instr(nir_builder *b,
+ 
+       nir_def *lane_id = nir_load_subgroup_invocation(b);
+ 
+-      for (unsigned idx = 0; idx < length; idx++) {
++      int vec_size = load_store_get_vec_size(desc, layout);
++      for (unsigned idx = 0; idx < length; idx += vec_size) {
+          nir_deref_instr *iter_deref =
+             get_cmat_component_deref(b, intr, lane_id, idx);
+-         nir_store_deref(b, iter_deref, vars[idx], 1);
++         nir_def *value = nir_vec(b, &vars[idx], vec_size);
++         nir_variable_mode modes = iter_deref->modes;
++
++         if (vec_size == 4) {
++            value = nir_pack_32_4x8(b, value);
++            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
++                                                 glsl_uint_type(), 4);
++         } else if (vec_size == 2 && value->bit_size == 32) {
++            value = nir_pack_64_2x32(b, value);
++            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
++                                                 glsl_uint64_t_type(), 8);
++         } else if (vec_size == 2 && value->bit_size == 16) {
++            value = nir_pack_32_2x16(b, value);
++            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
++                                                 glsl_uint_type(), 4);
++         }
++         nir_store_deref(b, iter_deref, value, 1);
+       }
+ 
+       nir_instr_remove(instr);
+-- 
+GitLab
+

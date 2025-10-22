@@ -1,0 +1,48 @@
+From fae045e44485023f3d1f61a94aaae1b2a84ee27d Mon Sep 17 00:00:00 2001
+From: Karol Herbst <kherbst@redhat.com>
+Date: Wed, 20 Aug 2025 12:45:06 +0200
+Subject: [PATCH] nak: use nir_opt_algebraic_before_ffma
+
+Totals:
+CodeSize: 9548680176 -> 9541351376 (-0.08%); split: -0.08%, +0.01%
+Number of GPRs: 50542296 -> 50533352 (-0.02%); split: -0.03%, +0.02%
+SLM Size: 5461996 -> 5462028 (+0.00%); split: -0.00%, +0.00%
+Static cycle count: 5878002785 -> 5874362998 (-0.06%); split: -0.12%, +0.05%
+Spills to memory: 45984 -> 46128 (+0.31%); split: -0.06%, +0.37%
+Fills from memory: 45984 -> 46128 (+0.31%); split: -0.06%, +0.37%
+Fills from reg: 200373 -> 200415 (+0.02%)
+Max warps/SM: 49025540 -> 49027916 (+0.00%); split: +0.01%, -0.01%
+
+Totals from 167674 (14.42% of 1162627) affected shaders:
+CodeSize: 3123985904 -> 3116657104 (-0.23%); split: -0.25%, +0.02%
+Number of GPRs: 11017543 -> 11008599 (-0.08%); split: -0.15%, +0.07%
+SLM Size: 2131180 -> 2131212 (+0.00%); split: -0.00%, +0.00%
+Static cycle count: 2931600667 -> 2927960880 (-0.12%); split: -0.23%, +0.11%
+Spills to memory: 39465 -> 39609 (+0.36%); split: -0.07%, +0.43%
+Fills from memory: 39465 -> 39609 (+0.36%); split: -0.07%, +0.43%
+Fills from reg: 104672 -> 104714 (+0.04%)
+Max warps/SM: 5577044 -> 5579420 (+0.04%); split: +0.09%, -0.05%
+---
+ src/nouveau/compiler/nak_nir.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/nouveau/compiler/nak_nir.c b/src/nouveau/compiler/nak_nir.c
+index 84a7bc1272e30..66531d26a3dc2 100644
+--- a/src/nouveau/compiler/nak_nir.c
++++ b/src/nouveau/compiler/nak_nir.c
+@@ -1105,6 +1105,12 @@ nak_postprocess_nir(nir_shader *nir,
+    OPT(nir, nir_lower_doubles, NULL, nak->nir_options.lower_doubles_options);
+    OPT(nir, nir_lower_int64);
+ 
++   /* Run this before the last optimization loop before algebraic_late */
++   do {
++      progress = false;
++      OPT(nir, nir_opt_algebraic_before_ffma);
++   } while (progress);
++
+    nak_optimize_nir(nir, nak);
+ 
+    do {
+-- 
+GitLab
+
