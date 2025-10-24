@@ -1,138 +1,1065 @@
-From d8270636fc8026bba891ff3854314d0e2cf8b1e2 Mon Sep 17 00:00:00 2001
-From: Karol Herbst <kherbst@redhat.com>
-Date: Wed, 22 Oct 2025 12:54:12 +0200
-Subject: [PATCH] nak/cmat: add optimisation to cmat load/store to do 32-bit
- load for f16vec2
+From 2f1739761e415453c5b0f494e5e8228318a8390c Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Sat, 30 Aug 2025 12:35:07 +0200
+Subject: [PATCH 1/5] nak/dataflow: Fix typo in comments
 
-Initial idea and code from Dave, but this is a complete rewrite of the
-patch.
-
-The Matrix layouts contain groups of values, for int8 we have vec4 groups,
-for fp16, fp32 and int32 we have vec2s. With this we load and store them
-as vectors getting rid of a bunch of address calculation.
+Signed-off-by: Lorenzo Rossi <git@rossilorenzo.dev>
 ---
- src/nouveau/compiler/nak_nir_lower_cmat.c | 76 +++++++++++++++++++++--
- 1 file changed, 72 insertions(+), 4 deletions(-)
+ src/compiler/rust/dataflow.rs               | 2 +-
+ src/nouveau/compiler/nak/calc_instr_deps.rs | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
 
-diff --git a/src/nouveau/compiler/nak_nir_lower_cmat.c b/src/nouveau/compiler/nak_nir_lower_cmat.c
-index 1e4c1e267bf1a..0c23dadeba0db 100644
---- a/src/nouveau/compiler/nak_nir_lower_cmat.c
-+++ b/src/nouveau/compiler/nak_nir_lower_cmat.c
-@@ -671,6 +671,28 @@ try_lower_cmat_load_to_ldsm(nir_builder *b, nir_intrinsic_instr *intr)
-                                      .matrix_layout = layout);
+diff --git a/src/compiler/rust/dataflow.rs b/src/compiler/rust/dataflow.rs
+index 8ea0a839e7415..585eeab4f4199 100644
+--- a/src/compiler/rust/dataflow.rs
++++ b/src/compiler/rust/dataflow.rs
+@@ -125,7 +125,7 @@ where
+     /// Returns true if block_out has changed, false otherwise
+     pub transfer: Transfer,
+ 
+-    /// Update the block output based on a predecessor's input
++    /// Update the block input based on a predecessor's output
+     pub join: Join,
  }
  
-+/**
-+ * Returns the possibly vectorization width we can use to load/store matrices
-+ * of the given cmat desc and layout
-+ */
-+static int load_store_get_vec_size(const struct glsl_cmat_description desc,
-+                                   enum glsl_matrix_layout layout)
-+{
-+   if ((desc.use != GLSL_CMAT_USE_B && layout != GLSL_MATRIX_LAYOUT_ROW_MAJOR) ||
-+       (desc.use == GLSL_CMAT_USE_B && layout != GLSL_MATRIX_LAYOUT_COLUMN_MAJOR))
-+      return 1;
+diff --git a/src/nouveau/compiler/nak/calc_instr_deps.rs b/src/nouveau/compiler/nak/calc_instr_deps.rs
+index 7b63858c55d4f..cde8691f0481b 100644
+--- a/src/nouveau/compiler/nak/calc_instr_deps.rs
++++ b/src/nouveau/compiler/nak/calc_instr_deps.rs
+@@ -550,8 +550,8 @@ fn insert_texture_barriers(f: &mut Function, sm: &dyn ShaderModel) {
+                 true
+             }
+         },
+-        join: |sim_out, pred_sim_in| {
+-            sim_out.merge(pred_sim_in);
++        join: |sim_in, pred_sim_out| {
++            sim_in.merge(pred_sim_out);
+         },
+     }
+     .solve();
+-- 
+GitLab
+
+
+From ba08412f92863926f571fb5188921dcd3542c43e Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Wed, 22 Oct 2025 13:53:05 +0200
+Subject: [PATCH 2/5] nak: Add latency_upper_bound to ShaderModel
+
+Signed-off-by: Lorenzo Rossi <git@rossilorenzo.dev>
+---
+ src/nouveau/compiler/nak/ir.rs                   |  8 ++++++++
+ src/nouveau/compiler/nak/sm20.rs                 |  6 +++++-
+ src/nouveau/compiler/nak/sm30_instr_latencies.rs |  4 ++++
+ src/nouveau/compiler/nak/sm32.rs                 |  6 +++++-
+ src/nouveau/compiler/nak/sm50.rs                 |  4 ++++
+ src/nouveau/compiler/nak/sm70.rs                 | 12 ++++++++++++
+ 6 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/ir.rs b/src/nouveau/compiler/nak/ir.rs
+index 13857b8bae954..188daa56fabed 100644
+--- a/src/nouveau/compiler/nak/ir.rs
++++ b/src/nouveau/compiler/nak/ir.rs
+@@ -9215,6 +9215,14 @@ pub trait ShaderModel {
+     /// Worst-case access-after-write latency
+     fn worst_latency(&self, write: &Op, dst_idx: usize) -> u32;
+ 
++    /// Upper bound on latency
++    ///
++    /// Every '*_latency' function must return latencies that are
++    /// bounded.  Ex: self.war_latency() <= self.latency_upper_bound().
++    /// This is only used for compile-time optimization.  If unsure, be
++    /// conservative.
++    fn latency_upper_bound(&self) -> u32;
 +
-+   switch (glsl_base_type_bit_size(desc.element_type)) {
-+   case 16:
-+   case 32:
-+      return 2;
-+   case  8:
-+      return 4;
-+   default:
-+      return 1;
-+   }
+     /// Maximum encodable instruction delay
+     fn max_instr_delay(&self) -> u8;
+ 
+diff --git a/src/nouveau/compiler/nak/sm20.rs b/src/nouveau/compiler/nak/sm20.rs
+index 88e50dbbf2179..2d98273542d1b 100644
+--- a/src/nouveau/compiler/nak/sm20.rs
++++ b/src/nouveau/compiler/nak/sm20.rs
+@@ -7,7 +7,7 @@ use crate::legalize::{
+ };
+ use crate::sm30_instr_latencies::{
+     encode_kepler_shader, instr_exec_latency, instr_latency,
+-    KeplerInstructionEncoder,
++    latency_upper_bound, KeplerInstructionEncoder,
+ };
+ use bitview::*;
+ 
+@@ -104,6 +104,10 @@ impl ShaderModel for ShaderModel20 {
+         13
+     }
+ 
++    fn latency_upper_bound(&self) -> u32 {
++        latency_upper_bound()
++    }
++
+     fn worst_latency(&self, write: &Op, dst_idx: usize) -> u32 {
+         instr_latency(self.sm, write, dst_idx)
+     }
+diff --git a/src/nouveau/compiler/nak/sm30_instr_latencies.rs b/src/nouveau/compiler/nak/sm30_instr_latencies.rs
+index 0b2cc7607d0eb..5fe9346784b8f 100644
+--- a/src/nouveau/compiler/nak/sm30_instr_latencies.rs
++++ b/src/nouveau/compiler/nak/sm30_instr_latencies.rs
+@@ -26,6 +26,10 @@ pub fn instr_latency(_sm: u8, op: &Op, _dst_idx: usize) -> u32 {
+     }
+ }
+ 
++pub fn latency_upper_bound() -> u32 {
++    24
 +}
 +
- static nir_deref_instr*
- get_cmat_component_deref(nir_builder *b, nir_intrinsic_instr *intr,
-                          nir_def *lane_id, unsigned idx)
-@@ -718,6 +740,7 @@ lower_cmat_load(nir_builder *b, nir_intrinsic_instr *intr)
-    }
+ pub fn instr_exec_latency(sm: u8, op: &Op) -> u32 {
+     let is_kepler_a = sm == 30;
+     match op {
+diff --git a/src/nouveau/compiler/nak/sm32.rs b/src/nouveau/compiler/nak/sm32.rs
+index 76ad114c95889..3ad5b4be01386 100644
+--- a/src/nouveau/compiler/nak/sm32.rs
++++ b/src/nouveau/compiler/nak/sm32.rs
+@@ -8,7 +8,7 @@ use crate::legalize::{
+ };
+ use crate::sm30_instr_latencies::{
+     encode_kepler_shader, instr_exec_latency, instr_latency,
+-    KeplerInstructionEncoder,
++    latency_upper_bound, KeplerInstructionEncoder,
+ };
+ use bitview::{
+     BitMutView, BitMutViewable, BitView, BitViewable, SetBit, SetField,
+@@ -110,6 +110,10 @@ impl ShaderModel for ShaderModel32 {
+         instr_latency(self.sm, write, dst_idx)
+     }
  
-    const struct glsl_cmat_description desc = cmat_src_desc(intr->src[0]);
-+   const enum glsl_matrix_layout layout = nir_intrinsic_matrix_layout(intr);
-    const unsigned length = get_cmat_length(desc);
- 
-    nir_def *vars[NIR_MAX_VEC_COMPONENTS];
-@@ -726,10 +749,37 @@ lower_cmat_load(nir_builder *b, nir_intrinsic_instr *intr)
- 
-    nir_def *lane_id = nir_load_subgroup_invocation(b);
- 
--   for (unsigned idx = 0; idx < length; idx++) {
-+   int vec_size = load_store_get_vec_size(desc, layout);
-+   for (unsigned idx = 0; idx < length; idx += vec_size) {
-       nir_deref_instr *iter_deref =
-          get_cmat_component_deref(b, intr, lane_id, idx);
--      vars[idx] = nir_load_deref(b, iter_deref);
-+      unsigned bit_size = glsl_get_bit_size(iter_deref->type);
-+      nir_variable_mode modes = iter_deref->modes;
++    fn latency_upper_bound(&self) -> u32 {
++        latency_upper_bound()
++    }
 +
-+      if (vec_size != 1 && vec_size * bit_size == 32)
-+         iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
-+                                              glsl_uint_type(), 4);
-+      else if (vec_size != 1 && vec_size * bit_size == 64)
-+         iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
-+                                              glsl_uint64_t_type(), 8);
+     fn max_instr_delay(&self) -> u8 {
+         32
+     }
+diff --git a/src/nouveau/compiler/nak/sm50.rs b/src/nouveau/compiler/nak/sm50.rs
+index 34c3f83942ef7..5a861d0df9b61 100644
+--- a/src/nouveau/compiler/nak/sm50.rs
++++ b/src/nouveau/compiler/nak/sm50.rs
+@@ -151,6 +151,10 @@ impl ShaderModel for ShaderModel50 {
+         13
+     }
+ 
++    fn latency_upper_bound(&self) -> u32 {
++        14
++    }
 +
-+      nir_def *value = nir_load_deref(b, iter_deref);
-+      if (vec_size == 4) {
-+         value = nir_unpack_32_4x8(b, value);
-+         vars[idx] = nir_channel(b, value, 0);
-+         vars[idx + 1] = nir_channel(b, value, 1);
-+         vars[idx + 2] = nir_channel(b, value, 2);
-+         vars[idx + 3] = nir_channel(b, value, 3);
-+      } else if (vec_size == 2) {
-+         if (value->bit_size == 64)
-+            value = nir_unpack_64_2x32(b, value);
-+         else
-+            value = nir_unpack_32_2x16(b, value);
-+         vars[idx] = nir_channel(b, value, 0);
-+         vars[idx + 1] = nir_channel(b, value, 1);
-+      } else {
-+         vars[idx] = value;
-+      }
-    }
+     fn worst_latency(&self, write: &Op, dst_idx: usize) -> u32 {
+         instr_latency(self.sm, write, dst_idx)
+     }
+diff --git a/src/nouveau/compiler/nak/sm70.rs b/src/nouveau/compiler/nak/sm70.rs
+index 309657caea6ae..26f882520d055 100644
+--- a/src/nouveau/compiler/nak/sm70.rs
++++ b/src/nouveau/compiler/nak/sm70.rs
+@@ -260,6 +260,18 @@ impl ShaderModel for ShaderModel70 {
+         }
+     }
  
-    nir_def *mat = nir_vec(b, vars, length);
-@@ -780,6 +830,7 @@ lower_cmat_instr(nir_builder *b,
- 
-    case nir_intrinsic_cmat_store: {
-       const struct glsl_cmat_description desc = cmat_src_desc(intr->src[1]);
-+      const enum glsl_matrix_layout layout = nir_intrinsic_matrix_layout(intr);
-       const unsigned length = get_cmat_length(desc);
-       nir_def *src = load_cmat_src(b, intr->src[1]);
- 
-@@ -789,10 +840,27 @@ lower_cmat_instr(nir_builder *b,
- 
-       nir_def *lane_id = nir_load_subgroup_invocation(b);
- 
--      for (unsigned idx = 0; idx < length; idx++) {
-+      int vec_size = load_store_get_vec_size(desc, layout);
-+      for (unsigned idx = 0; idx < length; idx += vec_size) {
-          nir_deref_instr *iter_deref =
-             get_cmat_component_deref(b, intr, lane_id, idx);
--         nir_store_deref(b, iter_deref, vars[idx], 1);
-+         nir_def *value = nir_vec(b, &vars[idx], vec_size);
-+         nir_variable_mode modes = iter_deref->modes;
++    fn latency_upper_bound(&self) -> u32 {
++        if self.is_blackwell() {
++            30
++        } else if self.is_ampere() || self.is_ada() {
++            30
++        } else if self.is_turing() {
++            25
++        } else {
++            15
++        }
++    }
 +
-+         if (vec_size == 4) {
-+            value = nir_pack_32_4x8(b, value);
-+            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
-+                                                 glsl_uint_type(), 4);
-+         } else if (vec_size == 2 && value->bit_size == 32) {
-+            value = nir_pack_64_2x32(b, value);
-+            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
-+                                                 glsl_uint64_t_type(), 8);
-+         } else if (vec_size == 2 && value->bit_size == 16) {
-+            value = nir_pack_32_2x16(b, value);
-+            iter_deref = nir_build_deref_cast(b, &iter_deref->def, modes,
-+                                                 glsl_uint_type(), 4);
-+         }
-+         nir_store_deref(b, iter_deref, value, 1);
-       }
+     fn worst_latency(&self, write: &Op, dst_idx: usize) -> u32 {
+         if self.is_blackwell() {
+             SM120Latency::raw(write, dst_idx, None, 0)
+-- 
+GitLab
+
+
+From 87288f87c1089818c6a47ae416cf4aceccdb6a77 Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Wed, 22 Oct 2025 13:53:48 +0200
+Subject: [PATCH 3/5] nak/reg_tracker: Add SparseRegTracker
+
+Signed-off-by: Lorenzo Rossi <git@rossilorenzo.dev>
+---
+ src/nouveau/compiler/nak/calc_instr_deps.rs   |   2 +-
+ .../compiler/nak/opt_instr_sched_postpass.rs  |   1 +
+ src/nouveau/compiler/nak/reg_tracker.rs       | 162 ++++++++++++------
+ 3 files changed, 112 insertions(+), 53 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/calc_instr_deps.rs b/src/nouveau/compiler/nak/calc_instr_deps.rs
+index cde8691f0481b..c5197e933afbc 100644
+--- a/src/nouveau/compiler/nak/calc_instr_deps.rs
++++ b/src/nouveau/compiler/nak/calc_instr_deps.rs
+@@ -4,7 +4,7 @@
+ use crate::api::{GetDebugFlags, DEBUG};
+ use crate::ir::*;
+ use crate::opt_instr_sched_common::estimate_block_weight;
+-use crate::reg_tracker::RegTracker;
++use crate::reg_tracker::{RegRefIterable, RegTracker};
  
-       nir_instr_remove(instr);
+ use compiler::dataflow::ForwardDataflow;
+ use rustc_hash::{FxHashMap, FxHashSet};
+diff --git a/src/nouveau/compiler/nak/opt_instr_sched_postpass.rs b/src/nouveau/compiler/nak/opt_instr_sched_postpass.rs
+index 62b441f180121..5ce08c11f634b 100644
+--- a/src/nouveau/compiler/nak/opt_instr_sched_postpass.rs
++++ b/src/nouveau/compiler/nak/opt_instr_sched_postpass.rs
+@@ -3,6 +3,7 @@
+ 
+ use crate::ir::*;
+ use crate::opt_instr_sched_common::*;
++use crate::reg_tracker::RegRefIterable;
+ use crate::reg_tracker::RegTracker;
+ use std::cmp::max;
+ use std::cmp::Reverse;
+diff --git a/src/nouveau/compiler/nak/reg_tracker.rs b/src/nouveau/compiler/nak/reg_tracker.rs
+index 49341ca1e8fba..3da71b87fd98e 100644
+--- a/src/nouveau/compiler/nak/reg_tracker.rs
++++ b/src/nouveau/compiler/nak/reg_tracker.rs
+@@ -1,6 +1,8 @@
+ // Copyright © 2022 Collabora, Ltd.
+ // SPDX-License-Identifier: MIT
+ 
++use rustc_hash::FxHashMap;
++
+ use crate::ir::*;
+ 
+ use std::ops::{Index, IndexMut, Range};
+@@ -14,7 +16,7 @@ pub struct RegTracker<T> {
+ }
+ 
+ fn new_array_with<T, const N: usize>(f: &impl Fn() -> T) -> [T; N] {
+-    let mut v = Vec::new();
++    let mut v = Vec::with_capacity(N);
+     for _ in 0..N {
+         v.push(f());
+     }
+@@ -33,57 +35,6 @@ impl<T> RegTracker<T> {
+         }
+     }
+ 
+-    pub fn for_each_instr_pred_mut(
+-        &mut self,
+-        instr: &Instr,
+-        mut f: impl FnMut(&mut T),
+-    ) {
+-        if let PredRef::Reg(reg) = &instr.pred.pred_ref {
+-            for i in &mut self[*reg] {
+-                f(i);
+-            }
+-        }
+-    }
+-
+-    pub fn for_each_instr_src_mut(
+-        &mut self,
+-        instr: &Instr,
+-        mut f: impl FnMut(usize, &mut T),
+-    ) {
+-        for (i, src) in instr.srcs().iter().enumerate() {
+-            match &src.src_ref {
+-                SrcRef::Reg(reg) => {
+-                    for t in &mut self[*reg] {
+-                        f(i, t);
+-                    }
+-                }
+-                SrcRef::CBuf(CBufRef {
+-                    buf: CBuf::BindlessUGPR(reg),
+-                    ..
+-                }) => {
+-                    for t in &mut self[*reg] {
+-                        f(i, t);
+-                    }
+-                }
+-                _ => (),
+-            }
+-        }
+-    }
+-
+-    pub fn for_each_instr_dst_mut(
+-        &mut self,
+-        instr: &Instr,
+-        mut f: impl FnMut(usize, &mut T),
+-    ) {
+-        for (i, dst) in instr.dsts().iter().enumerate() {
+-            if let Dst::Reg(reg) = dst {
+-                for t in &mut self[*reg] {
+-                    f(i, t);
+-                }
+-            }
+-        }
+-    }
+-
+     pub fn for_each_pred(&mut self, mut f: impl FnMut(&mut T)) {
+         for p in &mut self.pred[..] {
+             f(p);
+@@ -138,3 +89,110 @@ impl<T> IndexMut<RegRef> for RegTracker<T> {
+         }
+     }
+ }
++
++/// Memory-light version of [RegTracker].
++///
++/// This version uses sparse hashmaps instead of dense arrays.
++#[derive(Clone, PartialEq, Eq, Default)]
++pub struct SparseRegTracker<T: Default> {
++    regs: FxHashMap<RegRef, T>,
++}
++
++impl<T: Default + Clone + Eq> SparseRegTracker<T> {
++    pub fn for_each_pred(&mut self, f: impl FnMut(&mut T)) {
++        self.for_each_ref_mut(RegRef::new(RegFile::Pred, 0, 7), f);
++    }
++
++    pub fn for_each_carry(&mut self, f: impl FnMut(&mut T)) {
++        self.for_each_ref_mut(RegRef::new(RegFile::Carry, 0, 1), f);
++    }
++
++    pub fn merge_with(&mut self, other: &Self, mut f: impl FnMut(&mut T, &T)) {
++        use std::collections::hash_map::Entry;
++
++        for (k, v) in other.regs.iter() {
++            match self.regs.entry(*k) {
++                Entry::Occupied(mut occupied_entry) => {
++                    f(occupied_entry.get_mut(), v);
++                }
++                Entry::Vacant(vacant_entry) => {
++                    vacant_entry.insert((*v).clone());
++                }
++            }
++        }
++    }
++
++    pub fn retain(&mut self, mut f: impl FnMut(&mut T) -> bool) {
++        self.regs.retain(|_k, v| f(v));
++    }
++}
++
++/// Common behavior for [RegTracker] and [SparseRegTracker]
++pub trait RegRefIterable<T> {
++    fn for_each_ref_mut(&mut self, reg: RegRef, f: impl FnMut(&mut T));
++
++    fn for_each_instr_pred_mut(
++        &mut self,
++        instr: &Instr,
++        mut f: impl FnMut(&mut T),
++    ) {
++        if let PredRef::Reg(reg) = &instr.pred.pred_ref {
++            self.for_each_ref_mut(*reg, |t| f(t));
++        }
++    }
++
++    fn for_each_instr_src_mut(
++        &mut self,
++        instr: &Instr,
++        mut f: impl FnMut(usize, &mut T),
++    ) {
++        for (i, src) in instr.srcs().iter().enumerate() {
++            match &src.src_ref {
++                SrcRef::Reg(reg) => {
++                    self.for_each_ref_mut(*reg, |t| f(i, t));
++                }
++                SrcRef::CBuf(CBufRef {
++                    buf: CBuf::BindlessUGPR(reg),
++                    ..
++                }) => {
++                    self.for_each_ref_mut(*reg, |t| f(i, t));
++                }
++                _ => (),
++            }
++        }
++    }
++
++    fn for_each_instr_dst_mut(
++        &mut self,
++        instr: &Instr,
++        mut f: impl FnMut(usize, &mut T),
++    ) {
++        for (i, dst) in instr.dsts().iter().enumerate() {
++            if let Dst::Reg(reg) = dst {
++                self.for_each_ref_mut(*reg, |t| f(i, t));
++            }
++        }
++    }
++}
++
++impl<T: Default> RegRefIterable<T> for SparseRegTracker<T> {
++    fn for_each_ref_mut(&mut self, reg: RegRef, mut f: impl FnMut(&mut T)) {
++        match reg.file() {
++            RegFile::Bar => return, // Barriers have a HW scoreboard
++            RegFile::Mem => panic!("Not a register"),
++            _ => {}
++        }
++
++        for i in 0..reg.comps() {
++            f(self.regs.entry(reg.comp(i)).or_default());
++        }
++    }
++}
++
++impl<T> RegRefIterable<T> for RegTracker<T> {
++    fn for_each_ref_mut(&mut self, reg: RegRef, mut f: impl FnMut(&mut T)) {
++        for entry in &mut self[reg] {
++            f(entry);
++        }
++    }
++}
+-- 
+GitLab
+
+
+From 8bf61165a74b440c8b350dd5bea89ba15dcec5f0 Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Wed, 22 Oct 2025 13:55:33 +0200
+Subject: [PATCH 4/5] nak: Add cross-block instruction delay scheduling
+
+Currently each block schedules instruction independently from other
+blocks. Instructions in the block must then be scheduled conservatively
+to remove possible hazards that can occur in previous blocks.
+
+Replace the algorithm with an optimistic data-flow pass that takes into
+account all the following blocks. Gains a minor performance improvement
+across every shader (1-2%) and should never have any runtime performance
+degradation.
+
+Benchmarks:
+furmark       34932 -> 35597 (+2%)
+pixmark-piano 9027  ->  9113 (+1%)
+
+Signed-off-by: Lorenzo Rossi <git@rossilorenzo.dev>
+---
+ src/nouveau/compiler/nak/calc_instr_deps.rs | 458 +++++++++++++++-----
+ src/nouveau/compiler/nak/ir.rs              |  29 ++
+ src/nouveau/compiler/nak/reg_tracker.rs     |  12 -
+ 3 files changed, 376 insertions(+), 123 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/calc_instr_deps.rs b/src/nouveau/compiler/nak/calc_instr_deps.rs
+index c5197e933afbc..e96b3de0122c5 100644
+--- a/src/nouveau/compiler/nak/calc_instr_deps.rs
++++ b/src/nouveau/compiler/nak/calc_instr_deps.rs
+@@ -4,13 +4,15 @@
+ use crate::api::{GetDebugFlags, DEBUG};
+ use crate::ir::*;
+ use crate::opt_instr_sched_common::estimate_block_weight;
+-use crate::reg_tracker::{RegRefIterable, RegTracker};
++use crate::reg_tracker::{RegRefIterable, RegTracker, SparseRegTracker};
+ 
+-use compiler::dataflow::ForwardDataflow;
++use compiler::dataflow::{BackwardDataflow, ForwardDataflow};
+ use rustc_hash::{FxHashMap, FxHashSet};
+ use std::cmp::max;
++use std::hash::Hash;
+ use std::ops::Range;
+-use std::{slice, u8};
++use std::slice;
++use std::{u16, u32, u8};
+ 
+ #[derive(Clone)]
+ enum RegUse<T: Clone> {
+@@ -61,6 +63,79 @@ impl<T: Clone> RegUse<T> {
+     }
+ }
+ 
++#[derive(Clone, Copy, PartialEq, Eq, Hash)]
++enum RegReadWrite {
++    Read,
++    Write,
++}
++
++/// Maps each register read/write to a value
++/// a register can have multiple reads AND multiple writes at the same
++/// point in time if it comes from a merge.
++/// For edits inside a CFG block, a RegUseMap will always be either
++/// empty, with a single write or with one or multiple reads.
++///
++/// We need to track multiple reads as we don't know which one can cause
++/// the highest latency for the interfering instruction (in RaW).  For the
++/// same reason we might need to track both reads and writes in the case of
++/// a CFG block with multiple successors.
++#[derive(Clone, PartialEq, Eq, Default)]
++struct RegUseMap<K: Hash + Eq, V> {
++    map: FxHashMap<(RegReadWrite, K), V>,
++}
++
++impl<K, V> RegUseMap<K, V>
++where
++    K: Clone + Default + Hash + Eq,
++    V: Clone,
++{
++    pub fn add_read(&mut self, k: K, v: V) {
++        // Reads wait on previous writes (RaR don't exist)
++        self.map.retain(|k, _v| k.0 != RegReadWrite::Write);
++        self.map.insert((RegReadWrite::Read, k), v);
++    }
++
++    pub fn set_write(&mut self, k: K, v: V) {
++        // Writes wait on all previous Reads and writes
++        self.map.clear();
++        self.map.insert((RegReadWrite::Write, k), v);
++    }
++
++    pub fn iter_reads(&self) -> impl Iterator<Item = (&K, &V)> {
++        self.map
++            .iter()
++            .filter(|(k, _v)| k.0 == RegReadWrite::Read)
++            .map(|(k, v)| (&k.1, v))
++    }
++
++    pub fn iter_writes(&self) -> impl Iterator<Item = (&K, &V)> {
++        self.map
++            .iter()
++            .filter(|(k, _v)| k.0 == RegReadWrite::Write)
++            .map(|(k, v)| (&k.1, v))
++    }
++
++    /// Merge two instances using a custom merger for value conflicts
++    pub fn merge_with(
++        &mut self,
++        other: &Self,
++        mut merger: impl FnMut(&V, &V) -> V,
++    ) {
++        use std::collections::hash_map::Entry;
++        for (k, v) in other.map.iter() {
++            match self.map.entry(k.clone()) {
++                Entry::Vacant(vacant_entry) => {
++                    vacant_entry.insert(v.clone());
++                }
++                Entry::Occupied(mut occupied_entry) => {
++                    let orig = occupied_entry.get_mut();
++                    *orig = merger(&orig, v);
++                }
++            }
++        }
++    }
++}
++
+ struct DepNode {
+     read_dep: Option<usize>,
+     first_wait: Option<(usize, usize)>,
+@@ -670,128 +745,289 @@ fn assign_barriers(f: &mut Function, sm: &dyn ShaderModel) {
+     }
+ }
+ 
+-fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u64 {
+-    let mut min_num_static_cycles = 0;
+-    for i in (0..f.blocks.len()).rev() {
+-        let b = &mut f.blocks[i];
+-        let mut cycle = 0_u32;
+-
+-        // Vector mapping IP to start cycle
+-        let mut instr_cycle = vec![0; b.instrs.len()];
+-
+-        // Maps registers to RegUse<ip, src_dst_idx>.  Predicates are
+-        // represented by  src_idx = usize::MAX.
+-        let mut uses: Box<RegTracker<RegUse<(usize, usize)>>> =
+-            Box::new(RegTracker::new_with(&|| RegUse::None));
+-
+-        // Map from barrier to last waited cycle
+-        let mut bars = [0_u32; 6];
+-
+-        for ip in (0..b.instrs.len()).rev() {
+-            let instr = &b.instrs[ip];
+-            let mut min_start = cycle + sm.exec_latency(&instr.op);
+-            if let Some(bar) = instr.deps.rd_bar() {
+-                min_start = max(min_start, bars[usize::from(bar)] + 2);
++#[derive(Clone, PartialEq, Eq, Hash)]
++struct RegOrigin {
++    loc: InstrIdx,
++    // Index of the src (for reads) or dst (for writes) in the instruction.
++    src_dst_idx: u16,
++}
++
++impl Default for RegOrigin {
++    fn default() -> Self {
++        // Lower bound
++        Self {
++            loc: InstrIdx::new(0, 0),
++            src_dst_idx: 0,
++        }
++    }
++}
++
++// Delay accumulated from the blocks it passed, used to check for cross-block hazards.
++type AccumulatedDelay = u8;
++type DelayRegTracker = SparseRegTracker<RegUseMap<RegOrigin, AccumulatedDelay>>;
++
++struct BlockDelayScheduler<'a> {
++    sm: &'a dyn ShaderModel,
++    f: &'a Function,
++    // Map from barrier to last waited cycle
++    bars: [u32; 6],
++    // Current cycle count until end-of-block.
++    current_cycle: u32,
++    // Map from idx (block, instr) to block-relative cycle
++    instr_cycles: &'a mut Vec<Vec<u32>>,
++}
++
++impl BlockDelayScheduler<'_> {
++    /// Compute the starting cycle for an instruction to avoid a dependency hazard.
++    fn dependency_to_cycle(
++        &self,
++        curr_loc: InstrIdx, // Location of the current instruction
++        reg: &RegOrigin, // Register and location of instruction that will be executed later
++        delay: AccumulatedDelay, // Delay between the end of the current block and the later instruction
++        latency: u32, // Latency between current and later instruction
++    ) -> u32 {
++        debug_assert!(latency <= self.sm.latency_upper_bound());
++
++        let same_block = reg.loc.block_idx == curr_loc.block_idx
++            && reg.loc.instr_idx > curr_loc.instr_idx;
++
++        if same_block {
++            // Created this transfer pass
++            self.instr_cycles[reg.loc.block_idx as usize]
++                [reg.loc.instr_idx as usize]
++                + latency
++        } else {
++            // Remember that cycles are always counted from the end of a block.
++            // The next instruction happens after `delay` cycles after the
++            // current block is complete, so it is effectively executed at cycle
++            // `0 - delay`, adding the latency we get `latency - delay`
++            // Underflow means that the instruction is already done (delay > latency).
++            latency.checked_sub(delay.into()).unwrap_or(0)
++        }
++    }
++
++    fn process_instr(&mut self, loc: InstrIdx, reg_uses: &mut DelayRegTracker) {
++        let instr = &self.f[loc];
++
++        let mut min_start =
++            self.current_cycle + self.sm.exec_latency(&instr.op);
++
++        // Wait on rd/wr barriers
++        if let Some(bar) = instr.deps.rd_bar() {
++            min_start = max(min_start, self.bars[usize::from(bar)] + 2);
++        }
++        if let Some(bar) = instr.deps.wr_bar() {
++            min_start = max(min_start, self.bars[usize::from(bar)] + 2);
++        }
++
++        reg_uses.for_each_instr_dst_mut(instr, |i, u| {
++            for (orig, delay) in u.iter_writes() {
++                let l = self.sm.waw_latency(
++                    &instr.op,
++                    i,
++                    !instr.pred.pred_ref.is_none(),
++                    &self.f[orig.loc].op,
++                    orig.src_dst_idx as usize,
++                );
++                let s = self.dependency_to_cycle(loc, orig, *delay, l);
++                min_start = max(min_start, s);
+             }
+-            if let Some(bar) = instr.deps.wr_bar() {
+-                min_start = max(min_start, bars[usize::from(bar)] + 2);
++            for (orig, delay) in u.iter_reads() {
++                let l = if orig.src_dst_idx == u16::MAX {
++                    self.sm.paw_latency(&instr.op, i)
++                } else {
++                    self.sm.raw_latency(
++                        &instr.op,
++                        i,
++                        &self.f[orig.loc].op,
++                        orig.src_dst_idx as usize,
++                    )
++                };
++                let s = self.dependency_to_cycle(loc, orig, *delay, l);
++                min_start = max(min_start, s);
+             }
+-            uses.for_each_instr_dst_mut(instr, |i, u| match u {
+-                RegUse::None => {
+-                    // We don't know how it will be used but it may be used in
+-                    // the next block so we need at least assume the maximum
+-                    // destination latency from the end of the block.
+-                    let s = sm.worst_latency(&instr.op, i);
+-                    min_start = max(min_start, s);
+-                }
+-                RegUse::Write((w_ip, w_dst_idx)) => {
+-                    let s = instr_cycle[*w_ip]
+-                        + sm.waw_latency(
+-                            &instr.op,
+-                            i,
+-                            !instr.pred.pred_ref.is_none(),
+-                            &b.instrs[*w_ip].op,
+-                            *w_dst_idx,
+-                        );
+-                    min_start = max(min_start, s);
+-                }
+-                RegUse::Reads(reads) => {
+-                    for (r_ip, r_src_idx) in reads {
+-                        let c = instr_cycle[*r_ip];
+-                        let s = if *r_src_idx == usize::MAX {
+-                            c + sm.paw_latency(&instr.op, i)
+-                        } else {
+-                            c + sm.raw_latency(
+-                                &instr.op,
+-                                i,
+-                                &b.instrs[*r_ip].op,
+-                                *r_src_idx,
+-                            )
+-                        };
+-                        min_start = max(min_start, s);
+-                    }
+-                }
+-            });
+-            uses.for_each_instr_src_mut(instr, |i, u| match u {
+-                RegUse::None => (),
+-                RegUse::Write((w_ip, w_dst_idx)) => {
+-                    let s = instr_cycle[*w_ip]
+-                        + sm.war_latency(
+-                            &instr.op,
+-                            i,
+-                            &b.instrs[*w_ip].op,
+-                            *w_dst_idx,
+-                        );
+-                    min_start = max(min_start, s);
+-                }
+-                RegUse::Reads(_) => (),
+-            });
+ 
+-            let instr = &mut b.instrs[ip];
++            u.set_write(
++                RegOrigin {
++                    loc,
++                    src_dst_idx: i as u16,
++                },
++                0,
++            );
++        });
+ 
+-            let delay = min_start - cycle;
+-            let delay = delay.max(MIN_INSTR_DELAY.into()).try_into().unwrap();
+-            instr.deps.set_delay(delay);
++        reg_uses.for_each_instr_pred_mut(instr, |c| {
++            // WaP does not exist
++            c.add_read(
++                RegOrigin {
++                    loc,
++                    src_dst_idx: u16::MAX,
++                },
++                0,
++            );
++        });
++        reg_uses.for_each_instr_src_mut(instr, |i, u| {
++            for (orig, delay) in u.iter_writes() {
++                let l = self.sm.war_latency(
++                    &instr.op,
++                    i,
++                    &self.f[orig.loc].op,
++                    orig.src_dst_idx as usize,
++                );
++                let s = self.dependency_to_cycle(loc, orig, *delay, l);
++                min_start = max(min_start, s);
++            }
+ 
+-            instr_cycle[ip] = min_start;
++            u.add_read(
++                RegOrigin {
++                    loc,
++                    src_dst_idx: i as u16,
++                },
++                0,
++            );
++        });
+ 
+-            // Set the writes before adding the reads
+-            // as we are iterating backwards through instructions.
+-            uses.for_each_instr_dst_mut(instr, |i, c| {
+-                c.set_write((ip, i));
+-            });
+-            uses.for_each_instr_pred_mut(instr, |c| {
+-                c.add_read((ip, usize::MAX));
++        self.instr_cycles[loc.block_idx as usize][loc.instr_idx as usize] =
++            min_start;
++
++        // Kepler A membar conflicts with predicate writes
++        if self.sm.is_kepler_a() && matches!(&instr.op, Op::MemBar(_)) {
++            let read_origin = RegOrigin {
++                loc,
++                src_dst_idx: u16::MAX,
++            };
++            reg_uses.for_each_pred(|c| {
++                c.add_read(read_origin.clone(), 0);
+             });
+-            uses.for_each_instr_src_mut(instr, |i, c| {
+-                c.add_read((ip, i));
++            reg_uses.for_each_carry(|c| {
++                c.add_read(read_origin.clone(), 0);
+             });
+-            // Kepler A membar conflicts with predicate writes
+-            if sm.is_kepler_a() && matches!(&instr.op, Op::MemBar(_)) {
+-                uses.for_each_pred(|c| {
+-                    c.add_read((ip, usize::MAX));
+-                });
+-                uses.for_each_carry(|c| {
+-                    c.add_read((ip, usize::MAX));
+-                });
++        }
++
++        // "Issue" barriers other instructions will wait on.
++        for (bar, c) in self.bars.iter_mut().enumerate() {
++            if instr.deps.wt_bar_mask & (1 << bar) != 0 {
++                *c = min_start;
+             }
+-            for (bar, c) in bars.iter_mut().enumerate() {
+-                if instr.deps.wt_bar_mask & (1 << bar) != 0 {
+-                    *c = min_start;
+-                }
++        }
++
++        self.current_cycle = min_start;
++    }
++}
++
++fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u64 {
++    let mut instr_cycles: Vec<Vec<u32>> =
++        f.blocks.iter().map(|b| vec![0; b.instrs.len()]).collect();
++
++    let mut state_in: Vec<_> = vec![DelayRegTracker::default(); f.blocks.len()];
++    let mut state_out: Vec<_> =
++        vec![DelayRegTracker::default(); f.blocks.len()];
++
++    let latency_upper_bound: u8 = sm
++        .latency_upper_bound()
++        .try_into()
++        .expect("Latency upper bound too large!");
++
++    // Compute instruction delays using an optimistic backwards data-flow
++    // algorithm.  For back-cycles we assume the best and recompute when
++    // new data is available.  This is yields correct results as long as
++    // the data flow analysis is run until completion.
++    BackwardDataflow {
++        cfg: &f.blocks,
++        block_in: &mut state_in[..],
++        block_out: &mut state_out[..],
++        transfer: |block_idx, block, reg_in, reg_out| {
++            let mut uses = reg_out.clone();
++
++            let mut sched = BlockDelayScheduler {
++                sm,
++                f,
++                // Barriers are handled by `assign_barriers`, and it does
++                // not handle cross-block barrier signal/wait.
++                // We can safely assume that no barrier is active at the
++                // start and end of the block
++                bars: [0_u32; 6],
++                current_cycle: 0_u32,
++                instr_cycles: &mut instr_cycles,
++            };
++
++            for ip in (0..block.instrs.len()).rev() {
++                let loc = InstrIdx::new(block_idx, ip);
++                sched.process_instr(loc, &mut uses);
+             }
+ 
+-            cycle = min_start;
+-        }
++            // Update accumulated delay
++            let block_cycles = sched.current_cycle;
++            uses.retain(|reg_use| {
++                reg_use.map.retain(|(_rw, k), v| {
++                    let overcount = if k.loc.block_idx as usize == block_idx {
++                        // Only instrs before instr_idx must be counted
++                        instr_cycles[k.loc.block_idx as usize]
++                            [k.loc.instr_idx as usize]
++                    } else {
++                        0
++                    };
++                    let instr_executed = (block_cycles - overcount)
++                        .try_into()
++                        .unwrap_or(u8::MAX);
++                    // We only care about the accumulated delay until it
++                    // is bigger than the maximum delay of an instruction.
++                    // after that, it cannot cause hazards.
++                    let (added, overflow) =
++                        (*v).overflowing_add(instr_executed);
++                    *v = added;
++                    // Stop keeping track of entries that happened too
++                    // many cycles "in the future", and cannot affect
++                    // scheduling anymore
++                    !overflow && added <= latency_upper_bound
++                });
++                !reg_use.map.is_empty()
++            });
++
++            if *reg_in == uses {
++                false
++            } else {
++                *reg_in = uses;
++                true
++            }
++        },
++        join: |curr_in, succ_out| {
++            // We start with an optimistic assumption and gradually make it
++            // less optimistic.  So in the join operation we need to keep
++            // the "worst" accumulated latency, that is the lowest one.
++            // i.e. if an instruction has an accumulated latency of 2 cycles,
++            // it can interfere with the next block, while if it had 200 cycles
++            // it's highly unlikely that it could interfere.
++            curr_in.merge_with(succ_out, |a, b| {
++                a.merge_with(b, |ai, bi| (*ai).min(*bi))
++            });
++        },
++    }
++    .solve();
+ 
+-        let block_weight = estimate_block_weight(&f.blocks, i);
+-        min_num_static_cycles = u64::from(cycle)
+-            .checked_mul(block_weight)
+-            .expect("Cycle count estimate overflow")
+-            .checked_add(min_num_static_cycles)
+-            .expect("Cycle count estimate overflow");
++    // Update the deps.delay for each instruction and compute
++    for (bi, b) in f.blocks.iter_mut().enumerate() {
++        let cycles = &instr_cycles[bi];
++        for (ip, i) in b.instrs.iter_mut().enumerate() {
++            let delay = cycles[ip] - cycles.get(ip + 1).copied().unwrap_or(0);
++            let delay: u8 = delay.try_into().expect("Delay overflow");
++            i.deps.delay = delay.max(MIN_INSTR_DELAY) as u8;
++        }
+     }
+ 
++    let min_num_static_cycles = instr_cycles
++        .iter()
++        .enumerate()
++        .map(|(block_idx, cycles)| {
++            let cycles = cycles.last().copied().unwrap_or(0);
++            let block_weight = estimate_block_weight(&f.blocks, block_idx);
++            u64::from(cycles)
++                .checked_mul(block_weight)
++                .expect("Cycle count estimate overflow")
++        })
++        .reduce(|a, b| a.checked_add(b).expect("Cycle count estimate overflow"))
++        .unwrap_or(0);
++
+     let max_instr_delay = sm.max_instr_delay();
+     f.map_instrs(|mut instr, _| {
+         if instr.deps.delay > max_instr_delay {
+diff --git a/src/nouveau/compiler/nak/ir.rs b/src/nouveau/compiler/nak/ir.rs
+index 188daa56fabed..817fadbd694bf 100644
+--- a/src/nouveau/compiler/nak/ir.rs
++++ b/src/nouveau/compiler/nak/ir.rs
+@@ -8756,6 +8756,24 @@ impl BasicBlock {
+     }
+ }
+ 
++/// Stores the index of an instruction in a given Function
++///
++/// The block and instruction indices are stored in a memory-efficient way.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct InstrIdx {
++    pub block_idx: u32,
++    pub instr_idx: u32,
++}
++
++impl InstrIdx {
++    pub fn new(bi: usize, ii: usize) -> Self {
++        Self {
++            block_idx: bi.try_into().expect("Block index overflow"),
++            instr_idx: ii.try_into().expect("Instruction index overflow"),
++        }
++    }
++}
++
+ pub struct Function {
+     pub ssa_alloc: SSAValueAllocator,
+     pub phi_alloc: PhiAllocator,
+@@ -8847,6 +8865,17 @@ impl fmt::Display for Function {
+     }
+ }
+ 
++impl Index<InstrIdx> for Function {
++    type Output = Instr;
++
++    fn index(&self, index: InstrIdx) -> &Self::Output {
++        // Removed at compile time (except for 16-bit targets)
++        let block_idx: usize = index.block_idx.try_into().unwrap();
++        let instr_idx: usize = index.instr_idx.try_into().unwrap();
++        &self.blocks[block_idx].instrs[instr_idx]
++    }
++}
++
+ #[derive(Debug)]
+ pub struct ComputeShaderInfo {
+     pub local_size: [u16; 3],
+diff --git a/src/nouveau/compiler/nak/reg_tracker.rs b/src/nouveau/compiler/nak/reg_tracker.rs
+index 3da71b87fd98e..854e34ef7f847 100644
+--- a/src/nouveau/compiler/nak/reg_tracker.rs
++++ b/src/nouveau/compiler/nak/reg_tracker.rs
+@@ -34,18 +34,6 @@ impl<T> RegTracker<T> {
+             carry: new_array_with(f),
+         }
+     }
+-
+-    pub fn for_each_pred(&mut self, mut f: impl FnMut(&mut T)) {
+-        for p in &mut self.pred[..] {
+-            f(p);
+-        }
+-    }
+-
+-    pub fn for_each_carry(&mut self, mut f: impl FnMut(&mut T)) {
+-        for c in &mut self.carry {
+-            f(c);
+-        }
+-    }
+ }
+ 
+ impl<T> Index<RegRef> for RegTracker<T> {
+-- 
+GitLab
+
+
+From 1867d837fa9916879d6d80fb22fe3ca746f5aafa Mon Sep 17 00:00:00 2001
+From: Lorenzo Rossi <git@rossilorenzo.dev>
+Date: Wed, 22 Oct 2025 13:52:24 +0200
+Subject: [PATCH 5/5] nak: Fix delay insertion missing WaR
+
+Current code clears register writes after a register read is
+encountered, this handles the first WaR but hides the write from the
+reads that will succeed the first one. Ignoring subtle WaRaR hazards.
+To fix this, we don't clear writes when a register read is encountered.
+
+Thanks to Karol Herbst for finding and distilling this issue.
+
+Signed-off-by: Lorenzo Rossi <git@rossilorenzo.dev>
+---
+ src/nouveau/compiler/nak/calc_instr_deps.rs | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/calc_instr_deps.rs b/src/nouveau/compiler/nak/calc_instr_deps.rs
+index e96b3de0122c5..01f8ca7102bd0 100644
+--- a/src/nouveau/compiler/nak/calc_instr_deps.rs
++++ b/src/nouveau/compiler/nak/calc_instr_deps.rs
+@@ -72,13 +72,15 @@ enum RegReadWrite {
+ /// Maps each register read/write to a value
+ /// a register can have multiple reads AND multiple writes at the same
+ /// point in time if it comes from a merge.
+-/// For edits inside a CFG block, a RegUseMap will always be either
+-/// empty, with a single write or with one or multiple reads.
++/// For edits inside a CFG block, a RegUseMap will never contain multiple
++/// writes.
+ ///
+ /// We need to track multiple reads as we don't know which one can cause
+ /// the highest latency for the interfering instruction (in RaW).  For the
+ /// same reason we might need to track both reads and writes in the case of
+ /// a CFG block with multiple successors.
++/// We cannot flush writes after a read operation since we can still
++/// encounter other, slower reads that could interfere with the write.
+ #[derive(Clone, PartialEq, Eq, Default)]
+ struct RegUseMap<K: Hash + Eq, V> {
+     map: FxHashMap<(RegReadWrite, K), V>,
+@@ -90,8 +92,6 @@ where
+     V: Clone,
+ {
+     pub fn add_read(&mut self, k: K, v: V) {
+-        // Reads wait on previous writes (RaR don't exist)
+-        self.map.retain(|k, _v| k.0 != RegReadWrite::Write);
+         self.map.insert((RegReadWrite::Read, k), v);
+     }
+ 
 -- 
 GitLab
 
