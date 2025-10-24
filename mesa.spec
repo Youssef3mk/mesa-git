@@ -71,8 +71,6 @@ Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.ta
 
 
 Patch1:    2.patch
-Patch2:    3.patch
-Patch3:    4.patch
 
 
 BuildRequires:  meson >= 1.7.0
