@@ -51,15 +51,15 @@
 %global with_mesa_tools 1
 %global with_xlib_lease 1
 
-%global commit c430f394c5046249b4ed1e1b4bad5c0fe23962af
+%global commit 191e4b8fe0eff2585e4c52f398ed7fe04d4a674e
 
-%global shortcommit c430f39
+%global shortcommit 191e4b8
 
 
 Name:           mesa
 Summary:        Mesa graphics libraries
 Version:        25.3.1
-Release: 0.1122.git%{shortcommit}%{?dist}
+Release: 0.1123.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
