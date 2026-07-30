@@ -66,8 +66,7 @@ URL:            http://www.mesa3d.org
 
 Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 ##Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-
-
+Patch0:         video.patch
 
 
 
@@ -311,7 +310,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
-%autosetup -n  mesa-%{commit}   
+%autosetup -n  mesa-%{commit}
 
 
 
@@ -388,7 +387,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
   -Dvideo-codecs=all \
- 
+
 %if !0%{?with_libunwind}
   -Dlibunwind=disabled \
 %endif
