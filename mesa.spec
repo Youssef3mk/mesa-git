@@ -311,7 +311,7 @@ drivers, inspecting GPU state, compiler tools, and more.
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
-%autosetup -n  mesa-%{commit}
+%autosetup -n  mesa-%{commit}  -p1
 
 
 
