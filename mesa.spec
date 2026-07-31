@@ -300,15 +300,6 @@ Requires:       %{name}-libdisplay-info%{?_isa} = %{?epoch:%{epoch}:}%{version}-
 Development files for the libdisplay-info library.
 
 
-%if 0%{?with_mesa_tools}
-%package tools
-Summary:        Mesa development and debugging tools
-Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-
-%description tools
-Mesa development and debugging tools. Includes tools for debugging
-drivers, inspecting GPU state, compiler tools, and more.
-%endif
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
@@ -371,9 +362,6 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
   -Dgpuvis=%{?with_gpuvis:true}%{!?with_gpuvis:false} \
   -Dspirv-to-dxil=%{?with_spirv_to_dxil:true}%{!?with_spirv_to_dxil:false} \
-%if 0%{?with_mesa_tools}
-  -Dtools=drm-shim,glsl,intel,intel-ui,nir,nouveau,dlclose-skip \
-%endif
   -Dxlib-lease=%{?with_xlib_lease:enabled}%{!?with_xlib_lease:disabled} \
   -Dgles1=enabled \
   -Dgles2=enabled \
@@ -481,22 +469,11 @@ popd
 %{_libdir}/dri/d3d12_dri.so
 %endif
 
-%if 0%{?with_r300}
-%{_libdir}/dri/r300_dri.so
-%endif
-%if 0%{?with_radeonsi}
-%if 0%{?with_r600}
-%{_libdir}/dri/r600_dri.so
-%endif
-%{_libdir}/dri/radeonsi_dri.so
-%endif
 %{_libdir}/dri/crocus_dri.so
 %{_libdir}/dri/i915_dri.so
 %{_libdir}/dri/iris_dri.so
 %{_libdir}/dri/nouveau_dri.so
-%if 0%{?with_vmware}
-%{_libdir}/dri/vmwgfx_dri.so
-%endif
+
 %if 0%{?with_vulkan_hw}
 %{_libdir}/dri/zink_dri.so
 %endif
@@ -507,12 +484,7 @@ popd
 %{_libdir}/dri/d3d12_drv_video.so
 %endif
 %{_libdir}/dri/nouveau_drv_video.so
-%if 0%{?with_r600}
-%{_libdir}/dri/r600_drv_video.so
-%endif
-%if 0%{?with_radeonsi}
-%{_libdir}/dri/radeonsi_drv_video.so
-%endif
+
 %{_libdir}/dri/virtio_gpu_drv_video.so
 %endif
 
@@ -556,44 +528,4 @@ popd
 %{_bindir}/mesa-overlay-control.py
 %{_libdir}/libVkLayer_MESA_overlay.so
 %{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_overlay.json
-%endif
-
-%if 0%{?with_mesa_tools}
-%files tools
-# General development tools
-%{_bindir}/glsl_compiler
-%{_bindir}/spirv2nir
-%{_bindir}/mesa-screenshot-control.py
-%{_bindir}/intel_measure.py
-%{_bindir}/mda
-
-# Intel tools
-%{_bindir}/aubinator
-%{_bindir}/aubinator_error_decode
-%{_bindir}/aubinator_viewer
-
-%{_bindir}/elk_asm
-%{_bindir}/elk_disasm
-%{_bindir}/intel_dev_info
-%{_bindir}/intel_dump_gpu
-%{_bindir}/intel_error2aub
-%{_bindir}/intel_error2hangdump
-%{_bindir}/intel_hang_replay
-%{_bindir}/intel_hang_viewer
-%{_bindir}/intel_monitor
-%{_bindir}/intel_sanitize_gpu
-%{_bindir}/intel_stub_gpu
-/usr/libexec/libintel_dump_gpu.so
-/usr/libexec/libintel_sanitize_gpu.so
-
-# DRM shim libraries
-%{_libdir}/libamdgpu_noop_drm_shim.so
-%{_libdir}/libdlclose-skip.so
-%{_libdir}/libintel_noop_drm_shim.so
-%{_libdir}/libnouveau_noop_drm_shim.so
-%{_libdir}/libradeon_noop_drm_shim.so
-
-# Nouveau tools
-%{_bindir}/nv_mme_dump
-%{_bindir}/nv_push_dump
 %endif
