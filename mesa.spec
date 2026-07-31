@@ -2,22 +2,22 @@
 %global source_date_epoch_from_changelog 0
 # Since we're only building for x86_64 and i386, we can simplify these conditionals
 %global with_hardware 1
-%global with_radeonsi 1
-%global with_vmware 1
+%global with_radeonsi 0
+%global with_vmware 0
 %global with_vulkan_hw 1
 %global with_va 1
 %if !0%{?rhel}
-%global with_r300 1
-%global with_r600 1
+%global with_r300 0
+%global with_r600 0
 %global with_nvk %{with_vulkan_hw}
 %global with_opencl 1
 %endif
 %global base_vulkan %{?with_vulkan_hw:,amd}%{!?with_vulkan_hw:%{nil}}
 
 # Intel-specific features (available on both x86_64 and i386)
-%global with_crocus 1
+%global with_crocus 0
 %global with_i915   1
-%global with_iris   1
+%global with_iris   0
 %global with_intel_clc 1
 %global intel_platform_vulkan %{?with_vulkan_hw:,intel,intel_hasvk}%{!?with_vulkan_hw:%{nil}}
 
@@ -48,7 +48,7 @@
 %global with_vulkan_beta 1
 %global with_gpuvis 1
 %global with_spirv_to_dxil 1
-%global with_mesa_tools 1
+%global with_mesa_tools 0
 %global with_xlib_lease 1
 
 %global commit 7296f9af84cd5debd10ca1bf4f0f1f29ef98f8c6
@@ -571,8 +571,7 @@ popd
 %{_bindir}/aubinator
 %{_bindir}/aubinator_error_decode
 %{_bindir}/aubinator_viewer
-%{_bindir}/brw_asm
-%{_bindir}/brw_disasm
+
 %{_bindir}/elk_asm
 %{_bindir}/elk_disasm
 %{_bindir}/intel_dev_info
