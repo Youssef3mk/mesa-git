@@ -51,15 +51,15 @@
 %global with_mesa_tools 0
 %global with_xlib_lease 1
 
-%global commit 3e3631d98d0a0a3ba3f6ea71ea398bde2002c8e8
+%global commit 7296f9af84cd5debd10ca1bf4f0f1f29ef98f8c6
 
-%global shortcommit 3e3631d
+%global shortcommit 7296f9a
 
 
 Name:           mesa
 Summary:        Mesa graphics libraries
 Version:        26.3.1
-Release: 0.1323.git%{shortcommit}%{?dist}
+Release: 0.1313.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
@@ -300,6 +300,15 @@ Requires:       %{name}-libdisplay-info%{?_isa} = %{?epoch:%{epoch}:}%{version}-
 Development files for the libdisplay-info library.
 
 
+%if 0%{?with_mesa_tools}
+%package tools
+Summary:        Mesa development and debugging tools
+Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
+
+%description tools
+Mesa development and debugging tools. Includes tools for debugging
+drivers, inspecting GPU state, compiler tools, and more.
+%endif
 %prep
 # متابعة بقية خطوات %prep عادية
 ## -p1
@@ -457,7 +466,7 @@ popd
 %endif
 
 %files dri-drivers
-%{_datadir}/drirc.d/*.conf
+%{_datadir}/drirc.d/00-mesa-defaults.conf
 %{_libdir}/libgallium-*.so
 %{_libdir}/gbm/dri_gbm.so
 %{_libdir}/dri/kms_swrast_dri.so
@@ -472,6 +481,15 @@ popd
 %{_libdir}/dri/d3d12_dri.so
 %endif
 
+%if 0%{?with_r300}
+%{_libdir}/dri/r300_dri.so
+%endif
+%if 0%{?with_radeonsi}
+%if 0%{?with_r600}
+%{_libdir}/dri/r600_dri.so
+%endif
+%{_libdir}/dri/radeonsi_dri.so
+%endif
 %{_libdir}/dri/crocus_dri.so
 %{_libdir}/dri/i915_dri.so
 %{_libdir}/dri/iris_dri.so
@@ -489,7 +507,14 @@ popd
 %{_libdir}/dri/d3d12_drv_video.so
 %endif
 %{_libdir}/dri/nouveau_drv_video.so
-
+%if 0%{?with_r600}
+%{_libdir}/dri/r600_drv_video.so
+%endif
+%if 0%{?with_radeonsi}
+%{_libdir}/dri/radeonsi_drv_video.so
+%endif
+%{_libdir}/dri/virtio_gpu_drv_video.so
+%endif
 
 
 %files vulkan-drivers
@@ -531,4 +556,44 @@ popd
 %{_bindir}/mesa-overlay-control.py
 %{_libdir}/libVkLayer_MESA_overlay.so
 %{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_overlay.json
+%endif
+
+%if 0%{?with_mesa_tools}
+%files tools
+# General development tools
+%{_bindir}/glsl_compiler
+%{_bindir}/spirv2nir
+%{_bindir}/mesa-screenshot-control.py
+%{_bindir}/intel_measure.py
+%{_bindir}/mda
+
+# Intel tools
+%{_bindir}/aubinator
+%{_bindir}/aubinator_error_decode
+%{_bindir}/aubinator_viewer
+
+%{_bindir}/elk_asm
+%{_bindir}/elk_disasm
+%{_bindir}/intel_dev_info
+%{_bindir}/intel_dump_gpu
+%{_bindir}/intel_error2aub
+%{_bindir}/intel_error2hangdump
+%{_bindir}/intel_hang_replay
+%{_bindir}/intel_hang_viewer
+%{_bindir}/intel_monitor
+%{_bindir}/intel_sanitize_gpu
+%{_bindir}/intel_stub_gpu
+/usr/libexec/libintel_dump_gpu.so
+/usr/libexec/libintel_sanitize_gpu.so
+
+# DRM shim libraries
+%{_libdir}/libamdgpu_noop_drm_shim.so
+%{_libdir}/libdlclose-skip.so
+%{_libdir}/libintel_noop_drm_shim.so
+%{_libdir}/libnouveau_noop_drm_shim.so
+%{_libdir}/libradeon_noop_drm_shim.so
+
+# Nouveau tools
+%{_bindir}/nv_mme_dump
+%{_bindir}/nv_push_dump
 %endif
