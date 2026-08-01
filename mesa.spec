@@ -51,9 +51,9 @@
 %global with_mesa_tools 0
 %global with_xlib_lease 1
 
-%global commit a5ab30520c7b29b519dd1464e8af8b27c9a37cb3
+%global commit 959d6a425da065879e181726603b7b76d435b109
 
-%global shortcommit a5ab305
+%global shortcommit 959d6a4
 
 
 Name:           mesa
