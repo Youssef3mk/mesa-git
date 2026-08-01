@@ -59,24 +59,20 @@
 Name:           mesa
 Summary:        Mesa graphics libraries
 Version:        26.3.1
-Release: 0.1313.git%{shortcommit}%{?dist}
+Release:        0.1313.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
-Source0:         https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-
-##Source0:             https://gitlab.com/youssef3k/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
+##Source0:      https://gitlab.com/youssef3k/mesa/-/archive/%%{commit}.tar.gz#/mesa-%%{commit}.tar.gz
 Patch0:         video.patch
-
-
-
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
 BuildRequires:  gettext
-BuildRequires: libdisplay-info-devel
+BuildRequires:  libdisplay-info-devel
 
 %if 0%{?with_hardware}
 BuildRequires:  kernel-headers
@@ -165,7 +161,7 @@ BuildRequires:  pkgconfig(gtk+-3.0)
 %if 0%{?with_vulkan_hw}
 BuildRequires:  pkgconfig(vulkan)
 %endif
-BuildRequires: cmake git  DirectX-Headers-devel >= 1.618.1
+BuildRequires:  cmake git DirectX-Headers-devel >= 1.618.1
 
 %description
 %{summary}.
@@ -299,16 +295,8 @@ Requires:       %{name}-libdisplay-info%{?_isa} = %{?epoch:%{epoch}:}%{version}-
 %description libdisplay-info-devel
 Development files for the libdisplay-info library.
 
-
 %prep
-# متابعة بقية خطوات %prep عادية
-## -p1
-%autosetup -n  mesa-%{commit}  -p1
-
-
-
-
-
+%autosetup -n mesa-%{commit} -p1
 
 %build
 # Ensure standard Rust compiler flags are set
@@ -349,8 +337,8 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dplatforms=x11,wayland \
   -Dgallium-drivers=softpipe,llvmpipe,virgl%{?with_d3d12:,d3d12},nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
   -Dgallium-d3d12-video=enabled \
-   --wrap-mode=default \
-   -Dandroid-libbacktrace=disabled \
+  --wrap-mode=default \
+  -Dandroid-libbacktrace=disabled \
   -Dgallium-d3d12-graphics=enabled \
   -Damdgpu-virtio=true \
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
@@ -377,36 +365,30 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
   -Dvideo-codecs=all \
-
 %if !0%{?with_libunwind}
   -Dlibunwind=disabled \
 %endif
 %if !0%{?with_lmsensors}
   -Dlmsensors=disabled \
 %endif
-
 %ifarch %{ix86}
   -Dglx-read-only-text=true \
 %endif
-
   %{nil}
+
 %meson_build
 
 %install
 %meson_install
 
-
 # likewise glvnd
 rm -vf %{buildroot}%{_libdir}/libGLX_mesa.so
 rm -vf %{buildroot}%{_libdir}/libEGL_mesa.so
-# XXX can we just not build this
 rm -vf %{buildroot}%{_libdir}/libGLES*
 
-# glvnd needs a default provider for indirect rendering where it cannot
-# determine the vendor
+# glvnd needs a default provider for indirect rendering
 ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 
-# this keeps breaking, check it early.  note that the exit from eu-ftr is odd.
 pushd %{buildroot}%{_libdir}
 for i in libGL*.so ; do
     eu-findtextrel $i && exit 1
@@ -414,13 +396,14 @@ done
 popd
 
 %files filesystem
-
 %dir %{_libdir}/dri
 %dir %{_datadir}/drirc.d
+%{_datadir}/drirc.d/*.conf
 
 %files libGL
 %{_libdir}/libGLX_mesa.so.0*
 %{_libdir}/libGLX_system.so.0*
+
 %files libGL-devel
 %dir %{_includedir}/GL
 %dir %{_includedir}/GL/internal
@@ -430,6 +413,7 @@ popd
 %files libEGL
 %{_datadir}/glvnd/egl_vendor.d/50_mesa.json
 %{_libdir}/libEGL_mesa.so.0*
+
 %files libEGL-devel
 %dir %{_includedir}/EGL
 %{_includedir}/EGL/eglext_angle.h
@@ -438,6 +422,7 @@ popd
 %files libgbm
 %{_libdir}/libgbm.so.1
 %{_libdir}/libgbm.so.1.*
+
 %files libgbm-devel
 %{_libdir}/libgbm.so
 %{_includedir}/gbm.h
@@ -454,7 +439,6 @@ popd
 %endif
 
 %files dri-drivers
-%{_datadir}/drirc.d/00-mesa-defaults.conf
 %{_libdir}/libgallium-*.so
 %{_libdir}/gbm/dri_gbm.so
 %{_libdir}/dri/kms_swrast_dri.so
@@ -464,16 +448,13 @@ popd
 %{_libdir}/dri/*.so
 %exclude %{_libdir}/dri/apple_dri.so
 %exclude %{_libdir}/dri/armada-drm_dri.so
-# apple_dri.so doesn't exist in the build - removing
 %if 0%{?with_d3d12}
 %{_libdir}/dri/d3d12_dri.so
 %endif
-
 %{_libdir}/dri/crocus_dri.so
 %{_libdir}/dri/i915_dri.so
 %{_libdir}/dri/iris_dri.so
 %{_libdir}/dri/nouveau_dri.so
-
 %if 0%{?with_vulkan_hw}
 %{_libdir}/dri/zink_dri.so
 %endif
@@ -484,10 +465,8 @@ popd
 %{_libdir}/dri/d3d12_drv_video.so
 %endif
 %{_libdir}/dri/nouveau_drv_video.so
-
 %{_libdir}/dri/virtio_gpu_drv_video.so
 %endif
-
 
 %files vulkan-drivers
 %{_libdir}/libvulkan_lvp.so
@@ -526,6 +505,7 @@ popd
 
 %if 0%{?with_vulkan_overlay}
 %{_bindir}/mesa-overlay-control.py
+%{_bindir}/mesa-screenshot-control.py
 %{_libdir}/libVkLayer_MESA_overlay.so
 %{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_overlay.json
 %endif
