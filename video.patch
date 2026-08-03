@@ -1,46 +1,77 @@
-From 90b9c3c15bc17c773a7fb25d8edcb37e778fb718 Mon Sep 17 00:00:00 2001
-From: Karol Herbst <kherbst@redhat.com>
-Date: Mon, 3 Aug 2026 21:51:32 +0200
-Subject: [PATCH] nak/instr_sched_prepass: immediately schedule instructions if
- we have a carry in use
+From 305fb7d3120b9db003b8be1694f561784df5c025 Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Mon, 3 Aug 2026 17:59:58 -0400
+Subject: [PATCH] nak: Serialize carry access in instr_sched_prepass
 
-There seems to have been a bug lurking that could made the prepass
-scheduler reorder instructions pairs writing to/reading from the carry
-flag. However we don't support spilling it, so for now just force the
-prepass scheduler to keep the order of those pairs instact.
-
-In the future we should make the prepass scheduler a bit more smarter or
-teach RA how to spill carries, but that seems a bit too much for a bug fix.
-
-Fixes: d470487004f ("nak/instr_sched_prepass: Take predicate spilling into account when scheduling instrucitons")
-Fixes: b55b8da012d ("nak: Add a prepass instruction scheduler")
+Fixes: b55b8da0 ("nak: Add a prepass instruction scheduler")
 Closes: https://gitlab.freedesktop.org/mesa/mesa/-/work_items/15989
 ---
- src/nouveau/compiler/nak/opt_instr_sched_prepass.rs | 12 +++++++++---
- 1 file changed, 9 insertions(+), 3 deletions(-)
+ src/nouveau/compiler/nak/ir.rs                |  4 ++++
+ .../compiler/nak/opt_instr_sched_prepass.rs   | 23 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
 
+diff --git a/src/nouveau/compiler/nak/ir.rs b/src/nouveau/compiler/nak/ir.rs
+index 70acd9d1299f..c4bf7be1b97c 100644
+--- a/src/nouveau/compiler/nak/ir.rs
++++ b/src/nouveau/compiler/nak/ir.rs
+@@ -479,6 +479,10 @@ impl Dst {
+             Dst::Reg(reg) => Some(reg.file()),
+         }
+     }
++
++    pub fn is_carry(&self) -> bool {
++        self.file() == Some(RegFile::Carry)
++    }
+ }
+ 
+ impl From<RegRef> for Dst {
 diff --git a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
-index 854f061b0172..0590e1aeef0d 100644
+index 854f061b0172..e08674214246 100644
 --- a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
 +++ b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
-@@ -488,9 +488,15 @@ impl<'a> GenerateOrder<'a> {
-             }
+@@ -72,6 +72,7 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
  
-             // Pick an instruction to schedule
--            let next_idx = if used_regs[RegFile::GPR]
--                <= thresholds.heuristic_threshold
--                && used_regs[RegFile::Pred] < self.max_regs[RegFile::Pred]
-+            // If we have a used carry, schedule everything immediately until
-+            // we don't.
-+            // TODO: We can't spill carries at the moment, so we can't reorder
-+            //       anything between instructions writing to the carry and the
-+            //       ones reading from it. In practice those come in pairs, so
-+            //       it shouldn't really matter all that much for now.
-+            let next_idx = if used_regs[RegFile::Carry] > 0
-+                || (used_regs[RegFile::GPR] <= thresholds.heuristic_threshold
-+                    && used_regs[RegFile::Pred] < self.max_regs[RegFile::Pred])
-             {
-                 let ReadyInstr { index, .. } = ready_instrs.pop_last().unwrap();
-                 index
+     let mut last_memory_op = None;
+     let mut last_barrier_op = None;
++    let mut last_carry_op = None;
+ 
+     for ip in 0..instrs.len() {
+         let instr = &instrs[ip];
+@@ -98,6 +99,17 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
+         }
+ 
+         for (i, src) in instr.srcs().iter().enumerate() {
++            if src.src_ref.is_carry() {
++                if let Some(carry_ip) = last_carry_op {
++                    if carry_ip < ip {
++                        g.add_edge(carry_ip, ip, EdgeLabel { latency: 0 });
++                    } else {
++                        debug_assert!(carry_ip == ip);
++                    }
++                }
++                last_carry_op = Some(ip);
++            }
++
+             for ssa in src.src_ref.iter_ssa() {
+                 if let Some(&(def_ip, def_idx)) = defs.get(ssa) {
+                     let def_instr = &instrs[def_ip];
+@@ -139,6 +151,17 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
+         }
+ 
+         for (i, dst) in instr.dsts().iter().enumerate() {
++            if dst.is_carry() {
++                if let Some(carry_ip) = last_carry_op {
++                    if carry_ip < ip {
++                        g.add_edge(carry_ip, ip, EdgeLabel { latency: 0 });
++                    } else {
++                        debug_assert!(carry_ip == ip);
++                    }
++                }
++                last_carry_op = Some(ip);
++            }
++
+             for &ssa in dst.iter_ssa() {
+                 defs.insert(ssa, (ip, i));
+             }
 -- 
 GitLab
