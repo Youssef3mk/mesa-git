@@ -1,77 +1,70 @@
-From 305fb7d3120b9db003b8be1694f561784df5c025 Mon Sep 17 00:00:00 2001
-From: Mel Henning <mhenning@darkrefraction.com>
-Date: Mon, 3 Aug 2026 17:59:58 -0400
-Subject: [PATCH] nak: Serialize carry access in instr_sched_prepass
 
-Fixes: b55b8da0 ("nak: Add a prepass instruction scheduler")
-Closes: https://gitlab.freedesktop.org/mesa/mesa/-/work_items/15989
----
- src/nouveau/compiler/nak/ir.rs                |  4 ++++
- .../compiler/nak/opt_instr_sched_prepass.rs   | 23 +++++++++++++++++++
- 2 files changed, 27 insertions(+)
-
-diff --git a/src/nouveau/compiler/nak/ir.rs b/src/nouveau/compiler/nak/ir.rs
-index 70acd9d1299f..c4bf7be1b97c 100644
---- a/src/nouveau/compiler/nak/ir.rs
-+++ b/src/nouveau/compiler/nak/ir.rs
-@@ -479,6 +479,10 @@ impl Dst {
-             Dst::Reg(reg) => Some(reg.file()),
+--- b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
++++ a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
+@@ -276,22 +276,15 @@
+     (RegFile::GPR, RegFile::Mem, 32 + 32),
+ ];
+ 
++/// Models how many gprs will be used after spilling other register files
++fn calc_used_gprs(mut p: PerRegFile<i32>, max_regs: PerRegFile<i32>) -> i32 {
+-/// Models how many registers will be used after spilling other register files
+-fn calc_used_regs(
+-    mut p: PerRegFile<i32>,
+-    max_regs: PerRegFile<i32>,
+-) -> PerRegFile<i32> {
+     for (src, dest, _) in SPILL_FILES {
+         if p[src] > max_regs[src] {
+             p[dest] += p[src] - max_regs[src];
          }
      }
-+
-+    pub fn is_carry(&self) -> bool {
-+        self.file() == Some(RegFile::Carry)
-+    }
+ 
++    p[RegFile::GPR]
+-    p
+-}
+-
+-fn calc_used_gprs(p: PerRegFile<i32>, max_regs: PerRegFile<i32>) -> i32 {
+-    calc_used_regs(p, max_regs)[RegFile::GPR]
  }
  
- impl From<RegRef> for Dst {
-diff --git a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
-index 854f061b0172..e08674214246 100644
---- a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
-+++ b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
-@@ -72,6 +72,7 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
+ fn calc_score_part(
+@@ -380,8 +373,8 @@
+         })
+     }
  
-     let mut last_memory_op = None;
-     let mut last_barrier_op = None;
-+    let mut last_carry_op = None;
++    fn current_used_gprs(&self) -> i32 {
++        calc_used_gprs(
+-    fn current_used_regs(&self) -> PerRegFile<i32> {
+-        calc_used_regs(
+             PerRegFile::new_with(|f| self.live.count(f).try_into().unwrap()),
+             self.max_regs,
+         )
+@@ -452,7 +445,7 @@
+         let mut current_cycle = 0;
+         let mut instr_order = Vec::with_capacity(g.nodes.len());
+         loop {
++            let used_gprs = self.current_used_gprs();
+-            let used_regs = self.current_used_regs();
  
-     for ip in 0..instrs.len() {
-         let instr = &instrs[ip];
-@@ -98,6 +99,17 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
-         }
- 
-         for (i, src) in instr.srcs().iter().enumerate() {
-+            if src.src_ref.is_carry() {
-+                if let Some(carry_ip) = last_carry_op {
-+                    if carry_ip < ip {
-+                        g.add_edge(carry_ip, ip, EdgeLabel { latency: 0 });
-+                    } else {
-+                        debug_assert!(carry_ip == ip);
-+                    }
-+                }
-+                last_carry_op = Some(ip);
-+            }
-+
-             for ssa in src.src_ref.iter_ssa() {
-                 if let Some(&(def_ip, def_idx)) = defs.get(ssa) {
-                     let def_instr = &instrs[def_ip];
-@@ -139,6 +151,17 @@ fn generate_dep_graph(sm: &ShaderModelInfo, instrs: &[Instr]) -> DepGraph {
-         }
- 
-         for (i, dst) in instr.dsts().iter().enumerate() {
-+            if dst.is_carry() {
-+                if let Some(carry_ip) = last_carry_op {
-+                    if carry_ip < ip {
-+                        g.add_edge(carry_ip, ip, EdgeLabel { latency: 0 });
-+                    } else {
-+                        debug_assert!(carry_ip == ip);
-+                    }
-+                }
-+                last_carry_op = Some(ip);
-+            }
-+
-             for &ssa in dst.iter_ssa() {
-                 defs.insert(ssa, (ip, i));
+             // Move ready instructions to the ready list
+             loop {
+@@ -488,10 +481,7 @@
              }
--- 
-GitLab
+ 
+             // Pick an instruction to schedule
++            let next_idx = if used_gprs <= thresholds.heuristic_threshold {
+-            let next_idx = if used_regs[RegFile::GPR]
+-                <= thresholds.heuristic_threshold
+-                && used_regs[RegFile::Pred] < self.max_regs[RegFile::Pred]
+-            {
+                 let ReadyInstr { index, .. } = ready_instrs.pop_last().unwrap();
+                 index
+             } else {
+@@ -584,7 +574,7 @@
+             current_cycle += 1;
+ 
+             debug_assert_eq!(
++                self.current_used_gprs(),
+-                self.current_used_regs()[RegFile::GPR],
+                 predicted_new_used_gprs_net
+             );
+         }
