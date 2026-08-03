@@ -58,7 +58,7 @@
 
 Name:           mesa
 Summary:        Mesa graphics libraries
-Version:        27.3
+Version:        27.4
 Release:        0.26111.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
