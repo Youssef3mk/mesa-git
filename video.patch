@@ -1,29 +1,17 @@
-
-diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
-index 5130ed6d6386..5047ba1dfada 100644
---- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
-+++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
-@@ -98,6 +98,7 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
-    unsigned i, j, component;
-    struct pipe_sampler_view sv_templ;
-    struct pipe_surface surf_templ;
-+   struct nouveau_screen *screen = nouveau_screen(pipe->screen);
+diff --git a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
+index 854f061b017..ed81a3ae000 100644
+--- a/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
++++ b/src/nouveau/compiler/nak/opt_instr_sched_prepass.rs
+@@ -488,9 +488,10 @@ impl<'a> GenerateOrder<'a> {
+             }
  
-    if (templat->buffer_format != PIPE_FORMAT_NV12)
-       return vl_video_buffer_create(pipe, templat);
-@@ -124,6 +125,12 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
-    templ.target = PIPE_TEXTURE_2D_ARRAY;
-    templ.depth0 = 1;
-    templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
-+   if (screen->device->chipset == 0x106 || screen->device->chipset == 0xd6) {
-+      if (templat->bind & PIPE_BIND_SHARED) {
-+         templ.bind |= PIPE_BIND_SHARED;
-+      }
-+      flags |= PIPE_RESOURCE_FLAG_DONT_MAP_DIRECTLY;
-+   }
-    templ.format = PIPE_FORMAT_R8_UNORM;
-    templ.width0 = buffer->base.width;
-    templ.height0 = (buffer->base.height + 1)/2;
--- 
-GitLab
-
+             // Pick an instruction to schedule
+-            let next_idx = if used_regs[RegFile::GPR]
++            let next_idx = if (used_regs[RegFile::GPR]
+                 <= thresholds.heuristic_threshold
+-                && used_regs[RegFile::Pred] < self.max_regs[RegFile::Pred]
++                && used_regs[RegFile::Pred] < self.max_regs[RegFile::Pred])
++                || used_regs[RegFile::Carry] > 0
+             {
+                 let ReadyInstr { index, .. } = ready_instrs.pop_last().unwrap();
+                 index
