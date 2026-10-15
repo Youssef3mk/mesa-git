@@ -1,0 +1,43 @@
+From d569304fdade2952578a7cd4babf4457fe498957 Mon Sep 17 00:00:00 2001
+From: "Bruce.carrot93" <carrot.live@hotmail.com>
+Date: Thu, 21 May 2026 16:52:12 +0000
+Subject: [PATCH] nouveau: fix nv106/nvd6 video buffer alignment on wayland
+
+Explicitly set PIPE_RESOURCE_FLAG_DONT_MAP_DIRECTLY and align binding flags
+when creating video buffers for NV106 and NVD6 chipsets. This prevents
+vaDeriveImage and pushbuf validation failures when sharing textures across
+processes in a modern Wayland/EGL environment.
+
+Fixes VLC and mpv fallback issues on Kepler-based legacy GPUs.
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 5130ed6d6386..5047ba1dfada 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -98,6 +98,7 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
+    unsigned i, j, component;
+    struct pipe_sampler_view sv_templ;
+    struct pipe_surface surf_templ;
++   struct nouveau_screen *screen = nouveau_screen(pipe->screen);
+ 
+    if (templat->buffer_format != PIPE_FORMAT_NV12)
+       return vl_video_buffer_create(pipe, templat);
+@@ -124,6 +125,12 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
+    templ.target = PIPE_TEXTURE_2D_ARRAY;
+    templ.depth0 = 1;
+    templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
++   if (screen->device->chipset == 0x106 || screen->device->chipset == 0xd6) {
++      if (templat->bind & PIPE_BIND_SHARED) {
++         templ.bind |= PIPE_BIND_SHARED;
++      }
++      flags |= PIPE_RESOURCE_FLAG_DONT_MAP_DIRECTLY;
++   }
+    templ.format = PIPE_FORMAT_R8_UNORM;
+    templ.width0 = buffer->base.width;
+    templ.height0 = (buffer->base.height + 1)/2;
+-- 
+GitLab
+
