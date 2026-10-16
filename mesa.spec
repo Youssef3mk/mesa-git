@@ -66,7 +66,7 @@ URL:            http://www.mesa3d.org
 
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 ##Source0:      https://gitlab.com/youssef3k/mesa/-/archive/%%{commit}.tar.gz#/mesa-%%{commit}.tar.gz
-Patch0:         vk.patch
+##Patch0:         vk.patch
 ##Patch1:     gl.patch
 
 BuildRequires:  meson >= 1.7.0
