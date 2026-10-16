@@ -1,0 +1,547 @@
+From a09fdb57481559c91ea49a6cfc2b5978ef7548e6 Mon Sep 17 00:00:00 2001
+From: Herman Semenoff <GermanAizek@yandex.ru>
+Date: Sat, 10 Oct 2026 23:11:48 +0300
+Subject: [PATCH 1/3] nvc0: optimize Kepler driver performance and state
+ handling
+
+---
+ .../nouveau/codegen/nv50_ir_emit_nvc0.cpp     |  2 +-
+ .../drivers/nouveau/nvc0/nvc0_screen.c        |  2 +-
+ src/gallium/drivers/nouveau/nvc0/nvc0_state.c | 56 +++++++++++++++----
+ .../nouveau/nvc0/nvc0_state_validate.c        |  6 +-
+ src/gallium/drivers/nouveau/nvc0/nvc0_tex.c   | 15 +++--
+ src/gallium/drivers/nouveau/nvc0/nvc0_vbo.c   |  1 -
+ 6 files changed, 59 insertions(+), 23 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/codegen/nv50_ir_emit_nvc0.cpp b/src/gallium/drivers/nouveau/codegen/nv50_ir_emit_nvc0.cpp
+index e9794828e81c..384ec310507d 100644
+--- a/src/gallium/drivers/nouveau/codegen/nv50_ir_emit_nvc0.cpp
++++ b/src/gallium/drivers/nouveau/codegen/nv50_ir_emit_nvc0.cpp
+@@ -3343,7 +3343,7 @@ SchedDataCalculator::calcDelay(const Instruction *insn, int cycle) const
+    default:
+       break;
+    }
+-   if (Target::getOpClass(insn->op) != OPCLASS_TEXTURE)
++   if (insn->op == OP_TEXBAR)
+       ready = MAX2(ready, score->res.tex);
+ 
+    delay = MAX2(delay, ready - cycle);
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c b/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c
+index 23d04b94f882..acdf2d7c6a90 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c
+@@ -818,7 +818,7 @@ nvc0_screen_create(struct nouveau_device *dev)
+     * TODO: could this be higher on Fermi?
+     */
+    if (dev->chipset >= 0xe0)
+-      screen->base.transfer_pushbuf_threshold = 1024;
++      screen->base.transfer_pushbuf_threshold = 4096;
+ 
+    screen->base.vidmem_bindings |= PIPE_BIND_CONSTANT_BUFFER |
+       PIPE_BIND_SHADER_BUFFER |
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_state.c b/src/gallium/drivers/nouveau/nvc0/nvc0_state.c
+index f6a86b96553b..a9a2c4f4723a 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_state.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_state.c
+@@ -197,6 +197,8 @@ nvc0_blend_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->blend == hwcso)
++        return;
+     nvc0->blend = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_BLEND;
+ }
+@@ -347,6 +349,8 @@ nvc0_rasterizer_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+    struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++   if (nvc0->rast == hwcso)
++      return;
+    nvc0->rast = hwcso;
+    nvc0->dirty_3d |= NVC0_NEW_3D_RASTERIZER;
+ }
+@@ -425,6 +429,8 @@ nvc0_zsa_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+    struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++   if (nvc0->zsa == hwcso)
++      return;
+    nvc0->zsa = hwcso;
+    nvc0->dirty_3d |= NVC0_NEW_3D_ZSA;
+ }
+@@ -489,14 +495,18 @@ nvc0_bind_sampler_states(struct pipe_context *pipe,
+                          unsigned start, unsigned nr, void **samplers)
+ {
+    const unsigned s = nvc0_shader_stage(shader);
++   struct nvc0_context *nvc0 = nvc0_context(pipe);
++   unsigned old_nr = nvc0->num_samplers[s];
+ 
+    assert(start == 0);
+-   nvc0_stage_sampler_states_bind(nvc0_context(pipe), s, nr, samplers);
++   nvc0_stage_sampler_states_bind(nvc0, s, nr, samplers);
+ 
+-   if (s == 5)
+-      nvc0_context(pipe)->dirty_cp |= NVC0_NEW_CP_SAMPLERS;
+-   else
+-      nvc0_context(pipe)->dirty_3d |= NVC0_NEW_3D_SAMPLERS;
++   if (nvc0->samplers_dirty[s] || old_nr != nvc0->num_samplers[s]) {
++      if (s == 5)
++         nvc0->dirty_cp |= NVC0_NEW_CP_SAMPLERS;
++      else
++         nvc0->dirty_3d |= NVC0_NEW_3D_SAMPLERS;
++   }
+ }
+ 
+ 
+@@ -572,14 +582,18 @@ nvc0_set_sampler_views(struct pipe_context *pipe, mesa_shader_stage shader,
+                        struct pipe_sampler_view **views)
+ {
+    const unsigned s = nvc0_shader_stage(shader);
++   struct nvc0_context *nvc0 = nvc0_context(pipe);
++   unsigned old_nr = nvc0->num_textures[s];
+ 
+    assert(start == 0);
+-   nvc0_stage_set_sampler_views(nvc0_context(pipe), s, nr, views);
++   nvc0_stage_set_sampler_views(nvc0, s, nr, views);
+ 
+-   if (s == 5)
+-      nvc0_context(pipe)->dirty_cp |= NVC0_NEW_CP_TEXTURES;
+-   else
+-      nvc0_context(pipe)->dirty_3d |= NVC0_NEW_3D_TEXTURES;
++   if (nvc0->textures_dirty[s] || old_nr != nvc0->num_textures[s]) {
++      if (s == 5)
++         nvc0->dirty_cp |= NVC0_NEW_CP_TEXTURES;
++      else
++         nvc0->dirty_3d |= NVC0_NEW_3D_TEXTURES;
++   }
+ }
+ 
+ /* ============================= SHADERS =======================================
+@@ -647,6 +661,8 @@ nvc0_vp_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->vertprog == hwcso)
++       return;
+     nvc0->vertprog = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_VERTPROG;
+ }
+@@ -663,6 +679,8 @@ nvc0_fp_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->fragprog == hwcso)
++       return;
+     nvc0->fragprog = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_FRAGPROG;
+ }
+@@ -679,6 +697,8 @@ nvc0_gp_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->gmtyprog == hwcso)
++       return;
+     nvc0->gmtyprog = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_GMTYPROG;
+ }
+@@ -695,6 +715,8 @@ nvc0_tcp_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->tctlprog == hwcso)
++       return;
+     nvc0->tctlprog = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_TCTLPROG;
+ }
+@@ -711,6 +733,8 @@ nvc0_tep_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->tevlprog == hwcso)
++       return;
+     nvc0->tevlprog = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_TEVLPROG;
+ }
+@@ -756,6 +780,8 @@ nvc0_cp_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->compprog == hwcso)
++       return;
+     nvc0->compprog = hwcso;
+     nvc0->dirty_cp |= NVC0_NEW_CP_PROGRAM;
+ }
+@@ -851,6 +877,8 @@ nvc0_set_blend_color(struct pipe_context *pipe,
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (!memcmp(&nvc0->blend_colour, bcol, sizeof(*bcol)))
++       return;
+     nvc0->blend_colour = *bcol;
+     nvc0->dirty_3d |= NVC0_NEW_3D_BLEND_COLOUR;
+ }
+@@ -861,6 +889,8 @@ nvc0_set_stencil_ref(struct pipe_context *pipe,
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (!memcmp(&nvc0->stencil_ref, &sr, sizeof(sr)))
++       return;
+     nvc0->stencil_ref = sr;
+     nvc0->dirty_3d |= NVC0_NEW_3D_STENCIL_REF;
+ }
+@@ -871,6 +901,8 @@ nvc0_set_clip_state(struct pipe_context *pipe,
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (!memcmp(nvc0->clip.ucp, clip->ucp, sizeof(clip->ucp)))
++       return;
+     memcpy(nvc0->clip.ucp, clip->ucp, sizeof(clip->ucp));
+ 
+     nvc0->dirty_3d |= NVC0_NEW_3D_CLIP;
+@@ -881,6 +913,8 @@ nvc0_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->sample_mask == sample_mask)
++       return;
+     nvc0->sample_mask = sample_mask;
+     nvc0->dirty_3d |= NVC0_NEW_3D_SAMPLE_MASK;
+ }
+@@ -1063,6 +1097,8 @@ nvc0_vertex_state_bind(struct pipe_context *pipe, void *hwcso)
+ {
+     struct nvc0_context *nvc0 = nvc0_context(pipe);
+ 
++    if (nvc0->vertex == hwcso)
++       return;
+     nvc0->vertex = hwcso;
+     nvc0->dirty_3d |= NVC0_NEW_3D_VERTEX;
+ }
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_state_validate.c b/src/gallium/drivers/nouveau/nvc0/nvc0_state_validate.c
+index 9cedf580b6e8..ff4b32509e4d 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_state_validate.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_state_validate.c
+@@ -803,9 +803,11 @@ nvc0_switch_pipe_context(struct nvc0_context *ctx_to)
+    unsigned s;
+ 
+    simple_mtx_assert_locked(&ctx_to->screen->state_lock);
+-   if (ctx_from)
++   if (ctx_from) {
++      if (ctx_from != ctx_to)
++         PUSH_KICK(ctx_from->base.pushbuf);
+       ctx_to->state = ctx_from->state;
+-   else
++   } else
+       ctx_to->state = ctx_to->screen->save_state;
+ 
+    ctx_to->dirty_3d = ~0;
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_tex.c b/src/gallium/drivers/nouveau/nvc0/nvc0_tex.c
+index 11d88092c748..e432e1bf876e 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_tex.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_tex.c
+@@ -686,6 +686,8 @@ nve4_validate_tsc(struct nvc0_context *nvc0, int s)
+    bool need_flush = false;
+ 
+    for (i = 0; i < nvc0->num_samplers[s]; ++i) {
++      if (!(nvc0->samplers_dirty[s] & (1 << i)))
++         continue;
+       struct nv50_tsc_entry *tsc = nv50_tsc_entry(nvc0->samplers[s][i]);
+ 
+       if (!tsc) {
+@@ -772,14 +774,11 @@ nve4_set_tex_handles(struct nvc0_context *nvc0)
+       PUSH_DATA (push, NVC0_CB_AUX_SIZE);
+       PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+       PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+-      do {
+-         int i = ffs(dirty) - 1;
+-         dirty &= ~(1 << i);
+-
+-         BEGIN_NVC0(push, NVC0_3D(CB_POS), 2);
+-         PUSH_DATA (push, NVC0_CB_AUX_TEX_INFO(i));
+-         PUSH_DATA (push, nvc0->tex_handles[s][i]);
+-      } while (dirty);
++      int i = ffs(dirty) - 1;
++      int n = util_logbase2(dirty) + 1 - i;
++      BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + n);
++      PUSH_DATA (push, NVC0_CB_AUX_TEX_INFO(i));
++      PUSH_DATAp(push, &nvc0->tex_handles[s][i], n);
+ 
+       nvc0->textures_dirty[s] = 0;
+       nvc0->samplers_dirty[s] = 0;
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_vbo.c b/src/gallium/drivers/nouveau/nvc0/nvc0_vbo.c
+index 7b8481606cdd..4bdbcd0604eb 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_vbo.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_vbo.c
+@@ -1167,7 +1167,6 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+          drawid++;
+    }
+ 
+-   PUSH_KICK(push);
+    simple_mtx_unlock(&nvc0->screen->state_lock);
+ 
+    nvc0->base.kick_notify = nvc0_default_kick_notify;
+-- 
+GitLab
+
+
+From ea62381bca25c7526d32bbb379e3c65e0b8ba123 Mon Sep 17 00:00:00 2001
+From: Herman Semenoff <GermanAizek@yandex.ru>
+Date: Sat, 10 Oct 2026 23:11:54 +0300
+Subject: [PATCH 2/3] nouveau: optimize pushbuf_kref buffer reference lookup
+
+---
+ src/gallium/winsys/nouveau/drm/nouveau.c | 28 +++++++++---------------
+ 1 file changed, 10 insertions(+), 18 deletions(-)
+
+diff --git a/src/gallium/winsys/nouveau/drm/nouveau.c b/src/gallium/winsys/nouveau/drm/nouveau.c
+index a942cff18633..d6c4ad3cc72c 100644
+--- a/src/gallium/winsys/nouveau/drm/nouveau.c
++++ b/src/gallium/winsys/nouveau/drm/nouveau.c
+@@ -1332,7 +1332,8 @@ pushbuf_kref(struct nouveau_pushbuf *push, struct nouveau_bo *bo, uint32_t flags
+    struct nouveau_device *dev = push->client->device;
+    struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
+    struct nouveau_pushbuf_krec *krec = nvpb->krec;
+-   struct nouveau_pushbuf *fpush;
++   struct nouveau_client_priv *pcli = nouveau_client(push->client);
++   struct nouveau_client_kref *ckref = likely(pcli->kref_nr > bo->handle) ? &pcli->kref[bo->handle] : NULL;
+    struct drm_nouveau_gem_pushbuf_bo *kref;
+    uint32_t domains, domains_wr, domains_rd;
+    int ret;
+@@ -1342,28 +1343,19 @@ pushbuf_kref(struct nouveau_pushbuf *push, struct nouveau_bo *bo, uint32_t flags
+       domains |= NOUVEAU_GEM_DOMAIN_VRAM;
+    if (flags & NOUVEAU_BO_GART)
+       domains |= NOUVEAU_GEM_DOMAIN_GART;
+-   domains_wr = domains * !!(flags & NOUVEAU_BO_WR);
+-   domains_rd = domains * !!(flags & NOUVEAU_BO_RD);
++   domains_wr = (flags & NOUVEAU_BO_WR) ? domains : 0;
++   domains_rd = (flags & NOUVEAU_BO_RD) ? domains : 0;
+ 
+-   /* if buffer is referenced on another pushbuf that is owned by the
+-    * same client, we need to flush the other pushbuf first to ensure
+-    * the correct ordering of commands
+-    */
+-   fpush = cli_push_get(push->client, bo);
+-   if (fpush && fpush != push)
+-      pushbuf_flush(fpush);
++   if (ckref && ckref->push && ckref->push != push)
++      pushbuf_flush(ckref->push);
+ 
+-   kref = cli_kref_get(push->client, bo);
++   kref = ckref ? ckref->kref : NULL;
+    if (kref) {
+-      /* possible conflict in memory types - flush and retry */
+-      if (!(kref->valid_domains & domains))
++      if (unlikely(!(kref->valid_domains & domains)))
+          return NULL;
+ 
+-      /* VRAM|GART buffer turning into a VRAM buffer.  Make sure
+-       * it'll fit in VRAM and force a flush if not.
+-       */
+-      if ((kref->valid_domains  & NOUVEAU_GEM_DOMAIN_GART) &&
+-          (            domains == NOUVEAU_GEM_DOMAIN_VRAM)) {
++      if (unlikely((kref->valid_domains  & NOUVEAU_GEM_DOMAIN_GART) &&
++                   (            domains == NOUVEAU_GEM_DOMAIN_VRAM))) {
+          if (krec->vram_used + bo->size > dev->vram_limit)
+             return NULL;
+          krec->vram_used += bo->size;
+-- 
+GitLab
+
+
+From 3950a535b0204e84b16d3957d9bbd1857f7741d1 Mon Sep 17 00:00:00 2001
+From: Herman Semenoff <GermanAizek@yandex.ru>
+Date: Sat, 10 Oct 2026 23:12:01 +0300
+Subject: [PATCH 3/3] nvk: optimize command buffer and submission overhead
+
+---
+ src/nouveau/vulkan/nvk_cmd_buffer.c |  3 ++
+ src/nouveau/vulkan/nvk_cmd_draw.c   | 54 +++++++++++++++++++++++++----
+ src/nouveau/vulkan/nvk_mem_arena.c  |  3 ++
+ src/nouveau/vulkan/nvk_queue.c      |  4 ++-
+ src/nouveau/vulkan/nvk_queue.h      |  2 ++
+ 5 files changed, 58 insertions(+), 8 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_buffer.c b/src/nouveau/vulkan/nvk_cmd_buffer.c
+index 626fbcb71df9..0c534d8847c0 100644
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.c
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
+@@ -1288,6 +1288,9 @@ void
+ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
+                                       struct nvk_descriptor_state *desc)
+ {
++   if (desc->push_dirty == 0)
++      return;
++
+    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    const uint32_t min_cbuf_alignment = nvk_min_cbuf_alignment(&pdev->info);
+diff --git a/src/nouveau/vulkan/nvk_cmd_draw.c b/src/nouveau/vulkan/nvk_cmd_draw.c
+index f77181f10d1a..78f6c82f3ffa 100644
+--- a/src/nouveau/vulkan/nvk_cmd_draw.c
++++ b/src/nouveau/vulkan/nvk_cmd_draw.c
+@@ -2421,11 +2421,17 @@ nvk_mme_set_vb_stride(struct mme_builder *b)
+ static void
+ nvk_flush_vi_state(struct nvk_cmd_buffer *cmd)
+ {
+-   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+-   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
+ 
++   if (!BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VI) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VI_BINDINGS_VALID) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VI_BINDING_STRIDES))
++      return;
++
++   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
++
+    struct nv_push *p = nvk_cmd_buffer_push(cmd, 258);
+ 
+    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VI_BINDINGS_VALID)) {
+@@ -2567,6 +2573,11 @@ nvk_flush_ts_state(struct nvk_cmd_buffer *cmd)
+ {
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
++
++   if (!BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_TS_PATCH_CONTROL_POINTS) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_TS_DOMAIN_ORIGIN))
++      return;
++
+    struct nv_push *p = nvk_cmd_buffer_push(cmd, 4);
+ 
+    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_TS_PATCH_CONTROL_POINTS)) {
+@@ -2716,6 +2727,15 @@ nvk_flush_vp_state(struct nvk_cmd_buffer *cmd)
+    */
+    const bool vp_broadcast_dirty = BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_FSR) &&
+                                    nvk_cmd_buffer_3d_cls(cmd) == TURING_A;
++
++   if (!BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VP_VIEWPORTS) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VP_DEPTH_CLAMP_RANGE) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VP_SCISSOR_COUNT) &&
++       !BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VP_SCISSORS) &&
++       !vp_broadcast_dirty)
++      return;
++
+    const bool need_turing_vp_broadcast = nvk_cmd_buffer_3d_cls(cmd) == TURING_A &&
+                                          !vk_fragment_shading_rate_is_disabled(&dyn->fsr);
+    const uint8_t viewport_count = need_turing_vp_broadcast ? NVK_MAX_VIEWPORTS :
+@@ -2951,9 +2971,14 @@ nvk_mme_set_z_clamp(struct mme_builder *b)
+ static void
+ nvk_flush_rs_state(struct nvk_cmd_buffer *cmd)
+ {
+-   const struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
++
++   if (!BITSET_TEST_RANGE(dyn->dirty, MESA_VK_DYNAMIC_RS_RASTERIZER_DISCARD_ENABLE,
++                                      MESA_VK_DYNAMIC_RS_LINE_STIPPLE))
++      return;
++
++   const struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    const struct nvk_rendering_state *render =
+       &cmd->state.gfx.render;
+ 
+@@ -3846,12 +3871,16 @@ vk_to_nv9097_stencil_op(VkStencilOp vk_op)
+ static void
+ nvk_flush_ds_state(struct nvk_cmd_buffer *cmd)
+ {
+-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 35);
+-
+-   const struct nvk_rendering_state *render = &cmd->state.gfx.render;
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
+ 
++   if (!BITSET_TEST_RANGE(dyn->dirty, MESA_VK_DYNAMIC_DS_DEPTH_TEST_ENABLE,
++                                      MESA_VK_DYNAMIC_DS_STENCIL_REFERENCE))
++      return;
++
++   const struct nvk_rendering_state *render = &cmd->state.gfx.render;
++   struct nv_push *p = nvk_cmd_buffer_push(cmd, 35);
++
+    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_DS_DEPTH_TEST_ENABLE)) {
+       bool enable = dyn->ds.depth.test_enable &&
+                     render->depth_att.vk_format != VK_FORMAT_UNDEFINED;
+@@ -4052,10 +4081,14 @@ nvk_mme_set_write_mask(struct mme_builder *b)
+ static void
+ nvk_flush_cb_state(struct nvk_cmd_buffer *cmd)
+ {
+-   struct nvk_rendering_state *render = &cmd->state.gfx.render;
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
+ 
++   if (!BITSET_TEST_RANGE(dyn->dirty, MESA_VK_DYNAMIC_CB_LOGIC_OP_ENABLE,
++                                      MESA_VK_DYNAMIC_COLOR_ATTACHMENT_MAP))
++      return;
++
++   struct nvk_rendering_state *render = &cmd->state.gfx.render;
+    struct nv_push *p =
+       nvk_cmd_buffer_push(cmd, 15 + 10 * render->color_att_count);
+ 
+@@ -4294,6 +4327,13 @@ nvk_mme_bind_cbuf_desc(struct mme_builder *b)
+ void
+ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
+ {
++   if (!cmd->state.gfx.cbuf_groups[0].dirty &&
++       !cmd->state.gfx.cbuf_groups[1].dirty &&
++       !cmd->state.gfx.cbuf_groups[2].dirty &&
++       !cmd->state.gfx.cbuf_groups[3].dirty &&
++       !cmd->state.gfx.cbuf_groups[4].dirty)
++      return;
++
+    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+    const uint32_t min_cbuf_alignment = nvk_min_cbuf_alignment(&pdev->info);
+diff --git a/src/nouveau/vulkan/nvk_mem_arena.c b/src/nouveau/vulkan/nvk_mem_arena.c
+index 58706dca4812..58734368c5a9 100644
+--- a/src/nouveau/vulkan/nvk_mem_arena.c
++++ b/src/nouveau/vulkan/nvk_mem_arena.c
+@@ -178,6 +178,9 @@ void
+ nvk_mem_arena_flush_map(struct nvk_device *dev,
+                         struct nvk_mem_arena *arena)
+ {
++   if (!p_atomic_read(&arena->map_dirty))
++      return;
++
+    simple_mtx_lock(&arena->mutex);
+    nvk_mem_arena_flush_map_locked(dev, arena);
+    simple_mtx_unlock(&arena->mutex);
+diff --git a/src/nouveau/vulkan/nvk_queue.c b/src/nouveau/vulkan/nvk_queue.c
+index 1fe82b66d429..bcbaea67d265 100644
+--- a/src/nouveau/vulkan/nvk_queue.c
++++ b/src/nouveau/vulkan/nvk_queue.c
+@@ -228,7 +228,7 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
+       if (result != VK_SUCCESS)
+          return result;
+ 
+-      if (upload_time_point > 0) {
++      if (upload_time_point > queue->last_upload_time_point) {
+          struct vk_sync_wait wait = {
+             .sync = dev->upload.stream.sync,
+             .stage_mask = ~0,
+@@ -237,6 +237,8 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
+          result = nvkmd_ctx_wait(queue->exec_ctx, &queue->vk.base, 1, &wait);
+          if (result != VK_SUCCESS)
+             return result;
++
++         queue->last_upload_time_point = upload_time_point;
+       }
+    }
+ 
+diff --git a/src/nouveau/vulkan/nvk_queue.h b/src/nouveau/vulkan/nvk_queue.h
+index a90ff19ca7b6..ef9f5d2f7159 100644
+--- a/src/nouveau/vulkan/nvk_queue.h
++++ b/src/nouveau/vulkan/nvk_queue.h
+@@ -51,6 +51,8 @@ struct nvk_queue {
+ 
+    /* CB0 for all draw commands on this queue */
+    struct nvkmd_mem *draw_cb0;
++
++   uint64_t last_upload_time_point;
+ };
+ 
+ static inline struct nvk_device *
+-- 
+GitLab
+
