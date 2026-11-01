@@ -12,7 +12,7 @@
 %global with_nvk %{with_vulkan_hw}
 %global with_opencl 1
 %endif
-%global base_vulkan %{?with_vulkan_hw:,amd}%{!?with_vulkan_hw:%{nil}}
+%global base_vulkan %{!?with_vulkan_hw:%{nil}}
 
 # Intel-specific features (available on both x86_64 and i386)
 %global with_crocus 0
@@ -40,16 +40,16 @@
 %bcond_with valgrind
 %endif
 
-%global vulkan_drivers swrast,virtio%{?base_vulkan}%{?intel_platform_vulkan}%{?with_nvk:,nouveau},microsoft-experimental
+%global vulkan_drivers %{?with_nvk:,nouveau}
 
 ## additional functionality not in the fedora standard packages
-%global with_vulkan_overlay 1
-%global with_gallium_extra_hud 1
-%global with_vulkan_beta 1
-%global with_gpuvis 1
-%global with_spirv_to_dxil 1
+%global with_vulkan_overlay 0
+%global with_gallium_extra_hud 0
+%global with_vulkan_beta 0
+%global with_gpuvis 0
+%global with_spirv_to_dxil 0
 %global with_mesa_tools 0
-%global with_xlib_lease 1
+%global with_xlib_lease 0
 
 %global commit 1d4b5ef4a5562b6e2dba2cb5aacd60787979ba86
 
@@ -334,9 +334,8 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 
 %meson \
   -Dplatforms=x11,wayland \
-  -Dgallium-drivers=llvmpipe,nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
-  -Dgallium-d3d12-video=enabled \
-  --wrap-mode=nodownload \
+  -Dgallium-drivers=llvmpipe,nouveau%{?with_i915:,i915}%{?with_vulkan_hw:,zink} \
+  --wrap-mode=default \
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
   -Dgallium-rusticl=%{?with_opencl:true}%{!?with_opencl:false} \
   -Dgallium-mediafoundation=disabled \
