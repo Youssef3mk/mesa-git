@@ -65,9 +65,7 @@ License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-##Source0:      https://gitlab.com/youssef3k/mesa/-/archive/%%{commit}.tar.gz#/mesa-%%{commit}.tar.gz
 Patch0:        sum.patch
-##Patch1:     gl.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -347,7 +345,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dgallium-mediafoundation=disabled \
   -Dgallium-extra-hud=%{?with_gallium_extra_hud:true}%{!?with_gallium_extra_hud:false} \
   -Dvulkan-drivers=%{vulkan_drivers} \
-  -Dvulkan-layers=intel-nullhw,device-select,overlay,screenshot,vram-report-limit \
+  -Dvulkan-layers=intel-nullhw,device-select,overlay,screenshot \
   -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
   -Dgpuvis=%{?with_gpuvis:true}%{!?with_gpuvis:false} \
   -Dspirv-to-dxil=%{?with_spirv_to_dxil:true}%{!?with_spirv_to_dxil:false} \
@@ -446,7 +444,6 @@ popd
 %{_libdir}/dri/libdril_dri.so
 %{_libdir}/dri/swrast_dri.so
 %{_libdir}/dri/virtio_gpu_dri.so
-%{_libdir}/dri/*.so
 %exclude %{_libdir}/dri/apple_dri.so
 %exclude %{_libdir}/dri/armada-drm_dri.so
 %if 0%{?with_d3d12}
@@ -480,8 +477,6 @@ popd
 %{_datadir}/vulkan/explicit_layer.d/VkLayer_INTEL_nullhw.json
 %{_libdir}/libVkLayer_MESA_screenshot.so
 %{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_screenshot.json
-%{_libdir}/libVkLayer_MESA_vram_report_limit.so
-%{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_vram_report_limit.json
 %if 0%{?with_d3d12}
 %{_bindir}/spirv2dxil
 %{_libdir}/libspirv_to_dxil.so
