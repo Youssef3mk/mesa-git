@@ -34,7 +34,7 @@
 # Set vulkan drivers to NVK (nouveau) only + swrast
 %global vulkan_drivers swrast,nouveau
 
-## additional functionality
+## additional functionality (Vulkan Overlay Disabled Completely)
 %global with_vulkan_overlay 0
 %global with_gallium_extra_hud 1
 %global with_vulkan_beta 1
@@ -299,7 +299,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dgallium-mediafoundation=disabled \
   -Dgallium-extra-hud=%{?with_gallium_extra_hud:true}%{!?with_gallium_extra_hud:false} \
   -Dvulkan-drivers=%{vulkan_drivers} \
-  -Dvulkan-layers=device-select,overlay \
+  -Dvulkan-layers=device-select \
   -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
   -Dxlib-lease=%{?with_xlib_lease:enabled}%{!?with_xlib_lease:disabled} \
   -Dgles1=enabled \
@@ -380,6 +380,7 @@ ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 
 %files dri-drivers
 %{_libdir}/libgallium-*.so
+%{_libdir}/dri/libdril_dri.so
 %{_libdir}/gbm/dri_gbm.so
 %{_libdir}/dri/kms_swrast_dri.so
 %{_libdir}/dri/swrast_dri.so
@@ -396,10 +397,5 @@ ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 %{_datadir}/vulkan/icd.d/lvp_icd.*.json
 %{_libdir}/libvulkan_nouveau.so
 %{_datadir}/vulkan/icd.d/nouveau_icd.*.json
-
-%if 0%{?with_vulkan_overlay}
-%{_bindir}/mesa-overlay-control.py
-%{_bindir}/mesa-screenshot-control.py
-%{_libdir}/libVkLayer_MESA_overlay.so
-%{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_overlay.json
-%endif
+%{_libdir}/libVkLayer_MESA_device_select.so
+%{_datadir}/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json
