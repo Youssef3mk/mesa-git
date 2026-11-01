@@ -334,23 +334,14 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 
 %meson \
   -Dplatforms=x11,wayland \
-  -Dgallium-drivers=softpipe,llvmpipe,virgl%{?with_d3d12:,d3d12},nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
+  -Dgallium-drivers=llvmpipe,nouveau%{?with_r300:,r300}%{?with_crocus:,crocus}%{?with_i915:,i915}%{?with_iris:,iris}%{?with_vmware:,svga}%{?with_radeonsi:,radeonsi}%{?with_r600:,r600}%{?with_vulkan_hw:,zink} \
   -Dgallium-d3d12-video=enabled \
   --wrap-mode=nodownload \
-  -Dvirtio-venus=disabled \
-  -Dandroid-libbacktrace=disabled \
-  -Dgallium-d3d12-graphics=enabled \
-  -Damd-options=virtio \
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
   -Dgallium-rusticl=%{?with_opencl:true}%{!?with_opencl:false} \
   -Dgallium-mediafoundation=disabled \
   -Dgallium-extra-hud=%{?with_gallium_extra_hud:true}%{!?with_gallium_extra_hud:false} \
   -Dvulkan-drivers=%{vulkan_drivers} \
-  -Dvulkan-layers=intel-nullhw,device-select,overlay,screenshot \
-  -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
-  -Dgpuvis=%{?with_gpuvis:true}%{!?with_gpuvis:false} \
-  -Dspirv-to-dxil=%{?with_spirv_to_dxil:true}%{!?with_spirv_to_dxil:false} \
-  -Dxlib-lease=%{?with_xlib_lease:enabled}%{!?with_xlib_lease:disabled} \
   -Dgles1=enabled \
   -Dgles2=enabled \
   -Dopengl=true \
@@ -358,11 +349,8 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dglx=dri \
   -Degl=enabled \
   -Dglvnd=enabled \
-  -Dintel-rt=%{?with_intel_vk_rt:enabled}%{!?with_intel_vk_rt:disabled} \
-  -Dmicrosoft-clc=enabled \
   -Dllvm=enabled \
   -Dshared-llvm=enabled \
-  -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
   -Dvideo-codecs=all \
 %if !0%{?with_libunwind}
