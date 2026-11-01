@@ -35,7 +35,7 @@
 %global vulkan_drivers swrast,nouveau
 
 ## additional functionality
-%global with_vulkan_overlay 1
+%global with_vulkan_overlay 0
 %global with_gallium_extra_hud 1
 %global with_vulkan_beta 1
 %global with_gpuvis 0
