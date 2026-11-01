@@ -1,0 +1,1162 @@
+From 5645fb692234a0eb62bb4fab0edfe6a82f7c381e Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sun, 18 Oct 2026 19:07:22 +0200
+Subject: [PATCH 01/10] nv50: size surface views by blocks when the block size
+ differs
+
+The VA frontend clears YUYV and UYVY video buffers, whose R8G8_R8B8 and
+G8R8_B8R8 resources hold two pixels per block, through RGBA8 surfaces.
+nv50_surface_from_miptree sizes the surface in pixels, so the render
+target is twice as wide as the buffer. Clears do not cover it today
+because they read their templates as nv50_surface; once they do, they
+write past the buffer and raise RT_FAULT traps.
+
+Convert the size to blocks of the view format, as radeonsi does.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/drivers/nouveau/nv50/nv50_miptree.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+index bcd6e6a5327c..ffd0ecefa592 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+@@ -485,6 +485,19 @@ nv50_surface_from_miptree(struct nv50_miptree *mt,
+    ns->depth = ps->last_layer - ps->first_layer + 1;
+    ns->offset = mt->level[templ->level].offset;
+ 
++   /* A view in a format with another block size, such as RGBA8 on a
++    * subsampled R8G8_R8B8 video buffer, covers the same blocks.
++    */
++   if (util_format_get_blockwidth(ps->format) !=
++       util_format_get_blockwidth(mt->base.base.format) ||
++       util_format_get_blockheight(ps->format) !=
++       util_format_get_blockheight(mt->base.base.format)) {
++      ns->width = util_format_get_nblocksx(mt->base.base.format, ns->width) *
++                  util_format_get_blockwidth(ps->format);
++      ns->height = util_format_get_nblocksy(mt->base.base.format, ns->height) *
++                   util_format_get_blockheight(ps->format);
++   }
++
+    ns->width <<= mt->ms_x;
+    ns->height <<= mt->ms_y;
+ 
+-- 
+GitLab
+
+
+From 20309ed55a1a2e5c327a37cee2cacbce290ef0aa Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:23 +0200
+Subject: [PATCH 02/10] nv50,nvc0: don't read pipe_surface templates as
+ nv50_surface in clears
+
+get_surfaces() in the VA frontend returns plain pipe_surface templates,
+and since 718e277ab56e util_clear_texture_as_surface() passes one from
+the stack for glClearTexImage. The nv50 and nvc0 clear hooks cast them to
+nv50_surface and read past their end: every VA video start raises
+TRAP_PROP SURF_HEIGHT_OVERRUN on nv50, and on nvc0 the WebGL texture
+clears of Chromium-based browsers fault the channel.
+
+Create the driver surface from the template in the hooks. nv84_video.c
+passes a real nv50_surface, so it calls the internal helper directly.
+
+Fixes: 718e277ab56e ("util/surface: delete more pipe_context::create_surface usage")
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ .../drivers/nouveau/nv50/nv50_context.h       |  6 ++
+ .../drivers/nouveau/nv50/nv50_surface.c       | 70 +++++++++++++----
+ src/gallium/drivers/nouveau/nv50/nv84_video.c |  6 +-
+ .../drivers/nouveau/nvc0/nvc0_surface.c       | 76 +++++++++++++++----
+ 4 files changed, 126 insertions(+), 32 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_context.h b/src/gallium/drivers/nouveau/nv50/nv50_context.h
+index c7114f4b8db3..2ecc797e1f65 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_context.h
++++ b/src/gallium/drivers/nouveau/nv50/nv50_context.h
+@@ -318,6 +318,12 @@ extern void nv50_clear(struct pipe_context *, unsigned buffers,
+                        const struct pipe_scissor_state *scissor_state,
+                        const union pipe_color_union *color,
+                        double depth, unsigned stencil);
++extern void nv50_clear_render_target_sf(struct pipe_context *,
++                                        struct nv50_surface *,
++                                        const union pipe_color_union *color,
++                                        unsigned dstx, unsigned dsty,
++                                        unsigned width, unsigned height,
++                                        bool render_condition_enabled);
+ extern void nv50_init_surface_functions(struct nv50_context *);
+ 
+ /* nv50_tex.c */
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_surface.c b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+index 1c1e73758f16..959433e637b8 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_surface.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+@@ -276,18 +276,18 @@ nv50_resource_copy_region(struct pipe_context *pipe,
+    nouveau_bufctx_reset(nv50->bufctx, NV50_BIND_2D);
+ }
+ 
+-static void
+-nv50_clear_render_target(struct pipe_context *pipe,
+-                         struct pipe_surface *dst,
+-                         const union pipe_color_union *color,
+-                         unsigned dstx, unsigned dsty,
+-                         unsigned width, unsigned height,
+-                         bool render_condition_enabled)
++void
++nv50_clear_render_target_sf(struct pipe_context *pipe,
++                            struct nv50_surface *sf,
++                            const union pipe_color_union *color,
++                            unsigned dstx, unsigned dsty,
++                            unsigned width, unsigned height,
++                            bool render_condition_enabled)
+ {
+    struct nv50_context *nv50 = nv50_context(pipe);
+    struct nouveau_pushbuf *push = nv50->base.pushbuf;
++   struct pipe_surface *dst = &sf->base;
+    struct nv50_miptree *mt = nv50_miptree(dst->texture);
+-   struct nv50_surface *sf = nv50_surface(dst);
+    struct nouveau_bo *bo = mt->base.bo;
+    unsigned z;
+ 
+@@ -365,20 +365,43 @@ nv50_clear_render_target(struct pipe_context *pipe,
+    nv50->dirty_3d |= NV50_NEW_3D_FRAMEBUFFER | NV50_NEW_3D_SCISSOR;
+ }
+ 
++/* Callers may pass a plain pipe_surface template, such as a plane returned
++ * by pipe_video_buffer::get_surfaces, rather than a surface made by
++ * nv50_miptree_surface_new. Reading nv50_surface fields from a template
++ * reads past its end, so build the driver surface here.
++ */
+ static void
+-nv50_clear_depth_stencil(struct pipe_context *pipe,
++nv50_clear_render_target(struct pipe_context *pipe,
+                          struct pipe_surface *dst,
+-                         unsigned clear_flags,
+-                         double depth,
+-                         unsigned stencil,
++                         const union pipe_color_union *color,
+                          unsigned dstx, unsigned dsty,
+                          unsigned width, unsigned height,
+                          bool render_condition_enabled)
++{
++   struct pipe_surface *ps = nv50_miptree_surface_new(pipe, dst->texture, dst);
++
++   if (!ps)
++      return;
++
++   nv50_clear_render_target_sf(pipe, nv50_surface(ps), color, dstx, dsty,
++                               width, height, render_condition_enabled);
++   nv50_surface_destroy(pipe, ps);
++}
++
++static void
++nv50_clear_depth_stencil_sf(struct pipe_context *pipe,
++                            struct nv50_surface *sf,
++                            unsigned clear_flags,
++                            double depth,
++                            unsigned stencil,
++                            unsigned dstx, unsigned dsty,
++                            unsigned width, unsigned height,
++                            bool render_condition_enabled)
+ {
+    struct nv50_context *nv50 = nv50_context(pipe);
+    struct nouveau_pushbuf *push = nv50->base.pushbuf;
++   struct pipe_surface *dst = &sf->base;
+    struct nv50_miptree *mt = nv50_miptree(dst->texture);
+-   struct nv50_surface *sf = nv50_surface(dst);
+    struct nouveau_bo *bo = mt->base.bo;
+    uint32_t mode = 0;
+    unsigned z;
+@@ -453,6 +476,27 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
+    nv50->dirty_3d |= NV50_NEW_3D_FRAMEBUFFER | NV50_NEW_3D_SCISSOR;
+ }
+ 
++static void
++nv50_clear_depth_stencil(struct pipe_context *pipe,
++                         struct pipe_surface *dst,
++                         unsigned clear_flags,
++                         double depth,
++                         unsigned stencil,
++                         unsigned dstx, unsigned dsty,
++                         unsigned width, unsigned height,
++                         bool render_condition_enabled)
++{
++   struct pipe_surface *ps = nv50_miptree_surface_new(pipe, dst->texture, dst);
++
++   if (!ps)
++      return;
++
++   nv50_clear_depth_stencil_sf(pipe, nv50_surface(ps), clear_flags, depth,
++                               stencil, dstx, dsty, width, height,
++                               render_condition_enabled);
++   nv50_surface_destroy(pipe, ps);
++}
++
+ void
+ nv50_clear(struct pipe_context *pipe, unsigned buffers,
+            uint32_t color_clear_mask, uint8_t stencil_clear_mask,
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.c b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+index a7cb4e0e7319..09229cdc33bf 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+@@ -484,16 +484,16 @@ nv84_create_decoder(struct pipe_context *context,
+       mip.base.domain = NOUVEAU_BO_VRAM;
+       mip.base.bo = dec->mbring;
+       mip.base.address = dec->mbring->offset;
+-      context->clear_render_target(context, &surf.base, &color, 0, 0, 64, 4760, false);
++      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 64, 4760, false);
+       surf.offset = dec->vpring->size / 2 - 0x1000;
+       surf.width = 1024;
+       surf.height = 1;
+       mip.level[0].pitch = surf.width * 4;
+       mip.base.bo = dec->vpring;
+       mip.base.address = dec->vpring->offset;
+-      context->clear_render_target(context, &surf.base, &color, 0, 0, 1024, 1, false);
++      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 1024, 1, false);
+       surf.offset = dec->vpring->size - 0x1000;
+-      context->clear_render_target(context, &surf.base, &color, 0, 0, 1024, 1, false);
++      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 1024, 1, false);
+ 
+       PUSH_SPACE(nv50->base.pushbuf, 5);
+       PUSH_REF1(nv50->base.pushbuf, dec->fence, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
+index 2609a9a85e5f..91e346609266 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
+@@ -286,16 +286,16 @@ nvc0_resource_copy_region(struct pipe_context *pipe,
+ }
+ 
+ static void
+-nvc0_clear_render_target(struct pipe_context *pipe,
+-                         struct pipe_surface *dst,
+-                         const union pipe_color_union *color,
+-                         unsigned dstx, unsigned dsty,
+-                         unsigned width, unsigned height,
+-                         bool render_condition_enabled)
++nvc0_clear_render_target_sf(struct pipe_context *pipe,
++                            struct nv50_surface *sf,
++                            const union pipe_color_union *color,
++                            unsigned dstx, unsigned dsty,
++                            unsigned width, unsigned height,
++                            bool render_condition_enabled)
+ {
+    struct nvc0_context *nvc0 = nvc0_context(pipe);
+    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+-   struct nv50_surface *sf = nv50_surface(dst);
++   struct pipe_surface *dst = &sf->base;
+    struct nv04_resource *res = nv04_resource(sf->base.texture);
+    unsigned z;
+ 
+@@ -369,6 +369,29 @@ nvc0_clear_render_target(struct pipe_context *pipe,
+    nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
+ }
+ 
++/* Callers may pass a plain pipe_surface template, such as a plane returned
++ * by pipe_video_buffer::get_surfaces, rather than a surface made by
++ * nvc0_miptree_surface_new. Reading nv50_surface fields from a template
++ * reads past its end, so build the driver surface here.
++ */
++static void
++nvc0_clear_render_target(struct pipe_context *pipe,
++                         struct pipe_surface *dst,
++                         const union pipe_color_union *color,
++                         unsigned dstx, unsigned dsty,
++                         unsigned width, unsigned height,
++                         bool render_condition_enabled)
++{
++   struct pipe_surface *ps = nvc0_miptree_surface_new(pipe, dst->texture, dst);
++
++   if (!ps)
++      return;
++
++   nvc0_clear_render_target_sf(pipe, nv50_surface(ps), color, dstx, dsty,
++                               width, height, render_condition_enabled);
++   nv50_surface_destroy(pipe, ps);
++}
++
+ static void
+ nvc0_clear_buffer_push_nvc0(struct pipe_context *pipe,
+                             struct pipe_resource *res,
+@@ -620,19 +643,19 @@ nvc0_clear_buffer(struct pipe_context *pipe,
+ }
+ 
+ static void
+-nvc0_clear_depth_stencil(struct pipe_context *pipe,
+-                         struct pipe_surface *dst,
+-                         unsigned clear_flags,
+-                         double depth,
+-                         unsigned stencil,
+-                         unsigned dstx, unsigned dsty,
+-                         unsigned width, unsigned height,
+-                         bool render_condition_enabled)
++nvc0_clear_depth_stencil_sf(struct pipe_context *pipe,
++                            struct nv50_surface *sf,
++                            unsigned clear_flags,
++                            double depth,
++                            unsigned stencil,
++                            unsigned dstx, unsigned dsty,
++                            unsigned width, unsigned height,
++                            bool render_condition_enabled)
+ {
+    struct nvc0_context *nvc0 = nvc0_context(pipe);
+    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
++   struct pipe_surface *dst = &sf->base;
+    struct nv50_miptree *mt = nv50_miptree(dst->texture);
+-   struct nv50_surface *sf = nv50_surface(dst);
+    uint32_t mode = 0;
+    int unk = mt->base.base.target == PIPE_TEXTURE_2D;
+    unsigned z;
+@@ -691,6 +714,27 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
+    nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
+ }
+ 
++static void
++nvc0_clear_depth_stencil(struct pipe_context *pipe,
++                         struct pipe_surface *dst,
++                         unsigned clear_flags,
++                         double depth,
++                         unsigned stencil,
++                         unsigned dstx, unsigned dsty,
++                         unsigned width, unsigned height,
++                         bool render_condition_enabled)
++{
++   struct pipe_surface *ps = nvc0_miptree_surface_new(pipe, dst->texture, dst);
++
++   if (!ps)
++      return;
++
++   nvc0_clear_depth_stencil_sf(pipe, nv50_surface(ps), clear_flags, depth,
++                               stencil, dstx, dsty, width, height,
++                               render_condition_enabled);
++   nv50_surface_destroy(pipe, ps);
++}
++
+ void
+ nvc0_clear(struct pipe_context *pipe, unsigned buffers,
+            uint32_t color_clear_mask, uint8_t stencil_clear_mask,
+-- 
+GitLab
+
+
+From e6561f146e8cf0ea90a08f74126d105849794b34 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:28 +0200
+Subject: [PATCH 03/10] frontends/va: export interlaced surfaces through a
+ progressive copy
+
+nouveau decodes into interlaced surfaces, which vaExportSurfaceHandle
+rejects, so Firefox falls back to software decoding.
+
+Export a progressive NV12 copy instead, woven by the compositor on the
+first export and refreshed after each decode, video processing or
+vaPutImage. Write-only exports are still rejected. Drivers with
+progressive buffers are not affected.
+
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/frontends/va/image.c      |  4 ++
+ src/gallium/frontends/va/picture.c    |  4 ++
+ src/gallium/frontends/va/surface.c    | 75 ++++++++++++++++++++++++---
+ src/gallium/frontends/va/va_private.h |  3 ++
+ 4 files changed, 80 insertions(+), 6 deletions(-)
+
+diff --git a/src/gallium/frontends/va/image.c b/src/gallium/frontends/va/image.c
+index 509567625251..ce82ed054672 100644
+--- a/src/gallium/frontends/va/image.c
++++ b/src/gallium/frontends/va/image.c
+@@ -746,12 +746,16 @@ vlVaPutImage(VADriverContextP ctx, VASurfaceID surface, VAImageID image,
+       ret = vlVaPostProc(drv, NULL, tmp_surf->buffer, surf->buffer, &param);
+       if (drv->proc && drv->proc->destroy_fence)
+          pipe_video_codec_reference(&surf->codec, drv->proc);
++      if (ret == VA_STATUS_SUCCESS && surf->export_buffer)
++         ret = vlVaUpdateExportBuffer(drv, surf);
+       vlVaDestroySurface(drv, tmp_surf);
+       mtx_unlock(&drv->mutex);
+       return ret;
+    }
+ 
+    ret = vlVaUploadImage(drv, surf, img_buf, vaimage);
++   if (ret == VA_STATUS_SUCCESS && surf->export_buffer)
++      ret = vlVaUpdateExportBuffer(drv, surf);
+    mtx_unlock(&drv->mutex);
+ 
+    return ret;
+diff --git a/src/gallium/frontends/va/picture.c b/src/gallium/frontends/va/picture.c
+index f250bc795e05..0023bcd9a56e 100644
+--- a/src/gallium/frontends/va/picture.c
++++ b/src/gallium/frontends/va/picture.c
+@@ -360,6 +360,8 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
+                            PIPE_VIDEO_CAP_REQUIRES_FLUSH_ON_END_FRAME))
+       context->decoder->flush(context->decoder);
+ 
++   if (surf->export_buffer)
++      vlVaUpdateExportBuffer(drv, surf);
+ 
+    if (context->decoder->entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM) {
+       if (context->proc.dst_surface) {
+@@ -372,6 +374,8 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
+                return ret;
+             }
+          }
++         if (context->proc.dst_surface->export_buffer)
++            vlVaUpdateExportBuffer(drv, context->proc.dst_surface);
+       }
+    } else if (context->decoder->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+       switch (u_reduce_video_profile(context->templat.profile)) {
+diff --git a/src/gallium/frontends/va/surface.c b/src/gallium/frontends/va/surface.c
+index 170718f77047..4ad5ca101b43 100644
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -69,6 +69,8 @@ vlVaDestroySurface(vlVaDriver *drv, vlVaSurface *surf)
+ {
+    if (surf->buffer)
+       surf->buffer->destroy(surf->buffer);
++   if (surf->export_buffer)
++      surf->export_buffer->destroy(surf->export_buffer);
+    if (surf->pipe_fence)
+       drv->pipe->screen->fence_reference(drv->pipe->screen, &surf->pipe_fence, NULL);
+    if (surf->fence) {
+@@ -787,6 +789,53 @@ vlVaSurfaceFlush(vlVaDriver *drv, vlVaSurface *surf)
+                     drv->has_external_handles ? 0 : PIPE_FLUSH_ASYNC);
+ }
+ 
++/* Interlaced buffers keep the two fields in separate layers, which a DRM
++ * PRIME descriptor cannot describe, so vlVaExportSurfaceHandle exports a
++ * progressive copy instead. The copy is created on the first export and
++ * refreshed whenever the surface content changes, so that handles exported
++ * earlier keep showing the current picture.
++ */
++VAStatus
++vlVaUpdateExportBuffer(vlVaDriver *drv, vlVaSurface *surf)
++{
++   if (!surf->buffer || !surf->buffer->interlaced)
++      return VA_STATUS_ERROR_INVALID_SURFACE;
++
++   if (!surf->export_buffer) {
++      struct pipe_video_buffer templat = {
++         .buffer_format = surf->buffer->buffer_format,
++         .width = surf->buffer->width,
++         .height = surf->buffer->height,
++         .bind = PIPE_BIND_SHARED,
++      };
++
++      surf->export_buffer = vl_video_buffer_create(drv->pipe, &templat);
++      if (!surf->export_buffer)
++         return VA_STATUS_ERROR_ALLOCATION_FAILED;
++   }
++
++   struct pipe_vpp_desc param = {
++      .base = {
++         .out_pipe_fence = &surf->pipe_fence,
++         .flush_flags = drv->has_external_handles ? 0 : PIPE_FLUSH_ASYNC,
++      },
++      .src_region = {
++         .x1 = surf->templat.width,
++         .y1 = surf->templat.height,
++      },
++      .dst_region = {
++         .x1 = surf->templat.width,
++         .y1 = surf->templat.height,
++      },
++      .in_color_range = PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED,
++      .out_color_range = PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED,
++      .in_matrix_coefficients = PIPE_VIDEO_VPP_MCF_BT709,
++      .out_matrix_coefficients = PIPE_VIDEO_VPP_MCF_BT709,
++   };
++
++   return vlVaPostProc(drv, NULL, surf->buffer, surf->export_buffer, &param);
++}
++
+ static void
+ vlVaSwitchToProtectedContext(vlVaDriver *drv)
+ {
+@@ -1165,6 +1214,7 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
+ {
+    vlVaDriver *drv;
+    vlVaSurface *surf;
++   struct pipe_video_buffer *buf;
+    struct pipe_surface *surfaces;
+    struct pipe_screen *screen;
+    VAStatus ret;
+@@ -1195,12 +1245,25 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
+       return VA_STATUS_ERROR_INVALID_SURFACE;
+    }
+ 
+-   if (surf->buffer->interlaced) {
+-      mtx_unlock(&drv->mutex);
+-      return VA_STATUS_ERROR_INVALID_SURFACE;
++   buf = surf->buffer;
++   if (buf->interlaced) {
++      /* Writes to the progressive copy would not reach the surface. */
++      if (flags & VA_EXPORT_SURFACE_WRITE_ONLY) {
++         mtx_unlock(&drv->mutex);
++         return VA_STATUS_ERROR_INVALID_SURFACE;
++      }
++
++      if (!surf->export_buffer) {
++         ret = vlVaUpdateExportBuffer(drv, surf);
++         if (ret != VA_STATUS_SUCCESS) {
++            mtx_unlock(&drv->mutex);
++            return ret;
++         }
++      }
++      buf = surf->export_buffer;
+    }
+ 
+-   surfaces = surf->buffer->get_surfaces(surf->buffer);
++   surfaces = buf->get_surfaces(buf);
+ 
+    usage = 0;
+    if (flags & VA_EXPORT_SURFACE_WRITE_ONLY)
+@@ -1229,7 +1292,7 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
+ 
+ #else
+    VADRMPRIMESurfaceDescriptor *desc = descriptor;
+-   desc->fourcc = PipeFormatToVaFourcc(surf->buffer->buffer_format);
++   desc->fourcc = PipeFormatToVaFourcc(buf->buffer_format);
+    desc->width = surf->templat.width;
+    desc->height = surf->templat.height;
+    desc->num_objects = 0;
+@@ -1293,7 +1356,7 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
+    }
+ 
+    if (flags & VA_EXPORT_SURFACE_COMPOSED_LAYERS) {
+-      uint32_t drm_format = pipe_format_to_drm_format(surf->buffer->buffer_format);
++      uint32_t drm_format = pipe_format_to_drm_format(buf->buffer_format);
+       if (drm_format == DRM_FORMAT_INVALID) {
+          ret = VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+          goto fail;
+diff --git a/src/gallium/frontends/va/va_private.h b/src/gallium/frontends/va/va_private.h
+index e56a2d735cca..ce1ae1a48110 100644
+--- a/src/gallium/frontends/va/va_private.h
++++ b/src/gallium/frontends/va/va_private.h
+@@ -427,6 +427,8 @@ typedef struct {
+ 
+ typedef struct vlVaSurface {
+    struct pipe_video_buffer templat, *buffer;
++   /* Progressive copy of an interlaced buffer, see vlVaExportSurfaceHandle */
++   struct pipe_video_buffer *export_buffer;
+    struct util_dynarray subpics; /* vlVaSubpicture */
+    vlVaBuffer *coded_buf;
+    struct pipe_video_codec *codec;
+@@ -561,6 +563,7 @@ MESAPROC VAStatus vlVaHandleVAProcPipelineParameterBufferType(vlVaDriver *drv, v
+ VAStatus vlVaHandleSurfaceAllocate(vlVaDriver *drv, vlVaSurface *surface, const uint64_t *modifiers, unsigned modifiers_count);
+ struct pipe_video_buffer *vlVaGetSurfaceBuffer(vlVaDriver *drv, vlVaSurface *surface);
+ void vlVaSurfaceFlush(vlVaDriver *drv, vlVaSurface *surf);
++VAStatus vlVaUpdateExportBuffer(vlVaDriver *drv, vlVaSurface *surf);
+ void vlVaAddRawHeader(struct util_dynarray *headers, uint8_t type, uint32_t size, uint8_t *buf,
+                       bool is_slice, uint32_t emulation_bytes_start);
+ void vlVaGetBufferFeedback(vlVaBuffer *buf);
+-- 
+GitLab
+
+
+From 328c2e7784bd2fc0180363d6f0007c2d963ad17e Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:23 +0200
+Subject: [PATCH 04/10] winsys/nouveau: pass the DRM fd when deleting
+ subchannel objects
+
+nouveau_object_subchan_del() passes the channel handle to
+drmCommandWrite() instead of the DRM fd, so the object is never deleted.
+The next object at the same address fails with -EEXIST, which breaks
+decoder re-creation: Firefox drops hardware decoding when a video loops.
+
+Fixes: 821f4c8d99a3 ("nouveau: import libdrm_nouveau")
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/winsys/nouveau/drm/nouveau.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/winsys/nouveau/drm/nouveau.c b/src/gallium/winsys/nouveau/drm/nouveau.c
+index a942cff18633..14de23b0f07c 100644
+--- a/src/gallium/winsys/nouveau/drm/nouveau.c
++++ b/src/gallium/winsys/nouveau/drm/nouveau.c
+@@ -229,6 +229,7 @@ nouveau_object_channel_del(struct nouveau_object *obj)
+ static void
+ nouveau_object_subchan_del(struct nouveau_object *obj)
+ {
++   struct nouveau_drm *drm = nouveau_drm(obj->parent);
+    struct {
+       struct nvif_ioctl_v0 ioctl;
+       struct nvif_ioctl_del del;
+@@ -242,7 +243,7 @@ nouveau_object_subchan_del(struct nouveau_object *obj)
+       },
+    };
+ 
+-   drmCommandWrite(obj->parent->handle, DRM_NOUVEAU_NVIF, &args, sizeof(args));
++   drmCommandWrite(drm->fd, DRM_NOUVEAU_NVIF, &args, sizeof(args));
+ }
+ 
+ static void
+-- 
+GitLab
+
+
+From 5fe7d502147d115f71d427baf5ce6b092ef9239a Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:27 +0200
+Subject: [PATCH 05/10] nv50: only push constant buffer updates through a
+ current binding
+
+nv50_cb_push() writes through the binding point found in
+res->cb_bindings. That binding can be stale after the buffer is
+reallocated, or belong to another context, since nv50 contexts share the
+3D state. GTK 4's ngl renderer hits both, and its menus are drawn with
+the wrong projection.
+
+Use the binding only when it is current for this context and points at
+this buffer; otherwise write through the buffer's address.
+
+Backport-to: *
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/drivers/nouveau/nv50/nv50_transfer.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_transfer.c b/src/gallium/drivers/nouveau/nv50/nv50_transfer.c
+index a1e308206079..002f76e478fc 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_transfer.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_transfer.c
+@@ -540,16 +540,27 @@ nv50_cb_push(struct nouveau_context *nv,
+    struct nv50_context *nv50 = nv50_context(&nv->pipe);
+    struct nv50_constbuf *cb = NULL;
+    int s, bufid;
++   /* CB_DATA writes through a binding point, not to the buffer's address,
++    * and res->cb_bindings is shared by all contexts. Only use a binding
++    * point that this context has emitted, that is still on the hardware and
++    * that still points at this buffer: another context may have bound a
++    * different buffer to the same slot since.
++    */
++   const bool hw_state_ours = nv50->screen->cur_ctx == nv50;
++
+    /* Go through all the constbuf binding points of this buffer and try to
+     * find one which contains the region to be updated.
+     */
+-   for (s = 0; s < NV50_MAX_SHADER_STAGES && !cb; s++) {
+-      uint16_t bindings = res->cb_bindings[s];
++   for (s = 0; hw_state_ours && s < NV50_MAX_SHADER_STAGES && !cb; s++) {
++      uint16_t bindings = res->cb_bindings[s] & ~nv50->constbuf_dirty[s];
+       while (bindings) {
+          int i = ffs(bindings) - 1;
+          uint32_t cb_offset = nv50->constbuf[s][i].offset;
+ 
+          bindings &= ~(1 << i);
++         if (nv50->constbuf[s][i].user ||
++             nv50->constbuf[s][i].u.buf != &res->base)
++            continue;
+          if (cb_offset <= offset &&
+              cb_offset + nv50->constbuf[s][i].size >= offset + words * 4) {
+             cb = &nv50->constbuf[s][i];
+-- 
+GitLab
+
+
+From ea9d1b67624195f6db6a9a393629f7034344a5ed Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:24 +0200
+Subject: [PATCH 06/10] nouveau: keep H.264 references in the same VP slot
+
+VP3 to VP5 identify reference pictures by their slot (fifo_idx), and the
+motion vectors stored with each picture refer to those slots. ffmpeg
+puts the newest reference first, so the slots shift and B frames with
+temporal direct prediction use the wrong pictures, which shows as blocks
+in moving areas.
+
+Keep each reference in the slot it already had and put new references
+in free slots.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ .../drivers/nouveau/nouveau_vp3_video.h       |  2 ++
+ .../drivers/nouveau/nouveau_vp3_video_vp.c    | 32 ++++++++++++++++---
+ 2 files changed, 29 insertions(+), 5 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.h b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+index e49080733616..47c555ad87a3 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.h
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+@@ -110,6 +110,8 @@ struct nouveau_vp3_decoder {
+       unsigned decoded_bottom : 1;
+       unsigned decoded_first : 1;
+    } refs[17];
++   /* H.264 reference pictures by fifo_idx - 1, as the last picture used them */
++   struct nouveau_vp3_video_buffer *h264_refs[16];
+    unsigned fence_seq, fw_sizes, last_frame_num, tmp_stride, ref_stride;
+ 
+    unsigned bsp_idx, vp_idx, ppp_idx;
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index d35ac3152e3c..237f9e1c028c 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -235,7 +235,7 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+                                  char *map)
+ {
+    struct h264_picparm_vp stub_h = {}, *h = &stub_h;
+-   unsigned ring, i, j = 0;
++   unsigned ring, i, j = 0, num_refs, slot[16];
+    assert(offsetof(struct h264_picparm_vp, u224) == 0x224);
+    *is_ref = d->is_reference;
+    dec->last_frame_num = d->frame_num;
+@@ -277,10 +277,33 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+    memcpy(h->m4x4, d->pps->ScalingList4x4, sizeof(h->m4x4));
+    memcpy(h->m8x8, d->pps->ScalingList8x8, sizeof(h->m8x8));
+    h->u220 = 0;
+-   for (i = 0; i < d->num_ref_frames; ++i) {
+-      if (!d->ref[i])
+-         break;
++
++   /* The motion vectors VP stores with a picture name the pictures they
++    * point to by fifo_idx. Temporal direct prediction in B slices reads the
++    * vectors of the colocated picture, so these names must still point to
++    * the same pictures: a reference keeps its fifo_idx for as long as it is
++    * one. Applications may reorder the reference list at every picture
++    * (ffmpeg puts the newest reference first), so keep each reference in
++    * the slot it had for the previous picture and put new ones in free
++    * slots.
++    */
++   for (num_refs = 0; num_refs < d->num_ref_frames && d->ref[num_refs]; ++num_refs) {
++      for (j = 0; j < 16 && dec->h264_refs[j] != (void *)d->ref[num_refs]; ++j);
++      slot[num_refs] = j;
++      if (j < 16)
++         refs[j] = dec->h264_refs[j];
++   }
++   for (i = 0; i < num_refs; ++i) {
++      if (slot[i] < 16)
++         continue;
++      for (j = 0; refs[j]; ++j);
++      slot[i] = j;
+       refs[j] = (struct nouveau_vp3_video_buffer *)d->ref[i];
++   }
++   memcpy(dec->h264_refs, refs, sizeof(dec->h264_refs));
++
++   for (i = 0; i < num_refs; ++i) {
++      j = slot[i];
+       h->refs[j].fifo_idx = j + 1;
+       h->refs[j].tmp_idx = refs[j]->valid_ref;
+       assert(dec->refs[refs[j]->valid_ref].vidbuf == refs[j]);
+@@ -301,7 +324,6 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+          dec->refs[refs[j]->valid_ref].decoded_bottom && d->bottom_is_reference[i] ?
+          1 + d->is_long_term[i] : 0;
+       h->refs[j].pad = 0;
+-      j++;
+    }
+    for (; i < 16; ++i)
+       assert(!d->ref[i]);
+-- 
+GitLab
+
+
+From f5a46385abae43156ef29eb8a7031fe508cf6c71 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:25 +0200
+Subject: [PATCH 07/10] nouveau: wait for the video engines before destroying a
+ vp3 decoder
+
+Destroying a decoder while the engines are still busy leaves the channel
+unable to idle, and the next decoder hangs the GPU in g84_ectx_bind.
+This happens when a player stops a video mid-decode.
+
+Wait for the engine buffers before tearing the decoder down.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ .../drivers/nouveau/nouveau_vp3_video.c        | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 5130ed6d6386..7753f22764fa 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -205,8 +205,26 @@ static void
+ nouveau_vp3_decoder_destroy(struct pipe_video_codec *decoder)
+ {
+    struct nouveau_vp3_decoder *dec = (struct nouveau_vp3_decoder *)decoder;
++   struct nouveau_bo *engine_bos[] = {
++      dec->ref_bo, dec->bitplane_bo, dec->inter_bo[0], dec->inter_bo[1],
++   };
++   unsigned b;
+    int i;
+ 
++   /* The engines may still be working through the last pictures. If their
++    * objects and channels go away now, the kernel cannot idle the channel
++    * and the next decoder that binds the engines hangs the GPU. Every stage
++    * reads or writes one of these buffers, so wait for them first.
++    */
++   for (b = 0; b < ARRAY_SIZE(engine_bos); ++b) {
++      if (engine_bos[b])
++         nouveau_bo_wait(engine_bos[b], NOUVEAU_BO_RDWR, dec->client);
++   }
++   for (i = 0; i < NOUVEAU_VP3_VIDEO_QDEPTH; ++i) {
++      if (dec->bsp_bo[i])
++         nouveau_bo_wait(dec->bsp_bo[i], NOUVEAU_BO_RDWR, dec->client);
++   }
++
+    nouveau_bo_ref(NULL, &dec->ref_bo);
+    nouveau_bo_ref(NULL, &dec->bitplane_bo);
+    nouveau_bo_ref(NULL, &dec->inter_bo[0]);
+-- 
+GitLab
+
+
+From e7731ca314840014a0f1fc7cfb4512202d4c57bf Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Tue, 20 Oct 2026 09:21:18 +0200
+Subject: [PATCH 08/10] vl/compositor: render the V plane with its own gfx
+ shaders
+
+The graphics path renders both chroma planes of a three-plane target,
+such as I420 or YV12, with the UV shaders. They write U and V to the
+first two channels, so the single-channel V plane gets U, and VA video
+processing to these formats turns pictures green and magenta. The
+compute path already has separate U and V shaders.
+
+Add V variants of the YUV deinterlace and RGB-to-YUV fragment shaders,
+writing V to the first channel, and use them for the V plane.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/auxiliary/vl/vl_compositor.c     | 34 ++++++++++++--------
+ src/gallium/auxiliary/vl/vl_compositor.h     |  3 ++
+ src/gallium/auxiliary/vl/vl_compositor_gfx.c | 13 +++++---
+ src/gallium/auxiliary/vl/vl_compositor_gfx.h | 10 +++---
+ 4 files changed, 38 insertions(+), 22 deletions(-)
+
+diff --git a/src/gallium/auxiliary/vl/vl_compositor.c b/src/gallium/auxiliary/vl/vl_compositor.c
+index efce66668efb..5705f678623e 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor.c
++++ b/src/gallium/auxiliary/vl/vl_compositor.c
+@@ -55,19 +55,22 @@ init_shaders(struct vl_compositor *c)
+          return false;
+       }
+ 
+-      c->fs_yuv.weave.y = create_frag_shader_deint_yuv(c, true, true);
+-      c->fs_yuv.weave.uv = create_frag_shader_deint_yuv(c, false, true);
+-      c->fs_yuv.bob.y = create_frag_shader_deint_yuv(c, true, false);
+-      c->fs_yuv.bob.uv = create_frag_shader_deint_yuv(c, false, false);
+-      if (!c->fs_yuv.weave.y || !c->fs_yuv.weave.uv ||
+-          !c->fs_yuv.bob.y || !c->fs_yuv.bob.uv) {
++      c->fs_yuv.weave.y = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_Y, true);
++      c->fs_yuv.weave.uv = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_UV, true);
++      c->fs_yuv.weave.v = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_V, true);
++      c->fs_yuv.bob.y = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_Y, false);
++      c->fs_yuv.bob.uv = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_UV, false);
++      c->fs_yuv.bob.v = create_frag_shader_deint_yuv(c, VL_COMPOSITOR_PLANE_V, false);
++      if (!c->fs_yuv.weave.y || !c->fs_yuv.weave.uv || !c->fs_yuv.weave.v ||
++          !c->fs_yuv.bob.y || !c->fs_yuv.bob.uv || !c->fs_yuv.bob.v) {
+          debug_printf("Unable to create YCbCr i-to-YCbCr p deint fragment shader.\n");
+          return false;
+       }
+ 
+-      c->fs_rgb_yuv.y = create_frag_shader_rgb_yuv(c, true);
+-      c->fs_rgb_yuv.uv = create_frag_shader_rgb_yuv(c, false);
+-      if (!c->fs_rgb_yuv.y || !c->fs_rgb_yuv.uv) {
++      c->fs_rgb_yuv.y = create_frag_shader_rgb_yuv(c, VL_COMPOSITOR_PLANE_Y);
++      c->fs_rgb_yuv.uv = create_frag_shader_rgb_yuv(c, VL_COMPOSITOR_PLANE_UV);
++      c->fs_rgb_yuv.v = create_frag_shader_rgb_yuv(c, VL_COMPOSITOR_PLANE_V);
++      if (!c->fs_rgb_yuv.y || !c->fs_rgb_yuv.uv || !c->fs_rgb_yuv.v) {
+          debug_printf("Unable to create RGB-to-YUV fragment shader.\n");
+          return false;
+       }
+@@ -118,10 +121,13 @@ static void cleanup_shaders(struct vl_compositor *c)
+       c->pipe->delete_fs_state(c->pipe, c->fs_weave_rgb);
+       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.weave.y);
+       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.weave.uv);
++      c->pipe->delete_fs_state(c->pipe, c->fs_yuv.weave.v);
+       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.bob.y);
+       c->pipe->delete_fs_state(c->pipe, c->fs_yuv.bob.uv);
++      c->pipe->delete_fs_state(c->pipe, c->fs_yuv.bob.v);
+       c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.y);
+       c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.uv);
++      c->pipe->delete_fs_state(c->pipe, c->fs_rgb_yuv.v);
+    }
+ 
+    if (c->pipe_gfx_supported) {
+@@ -336,6 +342,7 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+    float half_a_line;
+    unsigned i;
+    bool y = plane == VL_COMPOSITOR_PLANE_Y;
++   bool v = plane == VL_COMPOSITOR_PLANE_V;
+ 
+    assert(s && c && buffer);
+ 
+@@ -363,7 +370,7 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+       s->layers[layer].src.tl.y += half_a_line;
+       s->layers[layer].src.br.y += half_a_line;
+       if (c->pipe_gfx_supported)
+-          s->layers[layer].fs = (y) ? c->fs_yuv.bob.y : c->fs_yuv.bob.uv;
++          s->layers[layer].fs = y ? c->fs_yuv.bob.y : v ? c->fs_yuv.bob.v : c->fs_yuv.bob.uv;
+       if (c->pipe_cs_composit_supported)
+           s->layers[layer].cs = (y) ? c->cs_yuv.progressive.y : c->cs_yuv.progressive.uv;
+       break;
+@@ -373,7 +380,7 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+       s->layers[layer].src.tl.y -= half_a_line;
+       s->layers[layer].src.br.y -= half_a_line;
+       if (c->pipe_gfx_supported)
+-          s->layers[layer].fs = (y) ? c->fs_yuv.bob.y : c->fs_yuv.bob.uv;
++          s->layers[layer].fs = y ? c->fs_yuv.bob.y : v ? c->fs_yuv.bob.v : c->fs_yuv.bob.uv;
+       if (c->pipe_cs_composit_supported)
+           s->layers[layer].cs = (y) ? c->cs_yuv.progressive.y : c->cs_yuv.progressive.uv;
+       break;
+@@ -394,7 +401,7 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+ 
+    default:
+       if (c->pipe_gfx_supported)
+-          s->layers[layer].fs = (y) ? c->fs_yuv.weave.y : c->fs_yuv.weave.uv;
++          s->layers[layer].fs = y ? c->fs_yuv.weave.y : v ? c->fs_yuv.weave.v : c->fs_yuv.weave.uv;
+       if (c->pipe_cs_composit_supported)
+           s->layers[layer].cs = (y) ? c->cs_yuv.weave.y : c->cs_yuv.weave.uv;
+       break;
+@@ -427,7 +434,8 @@ set_rgb_to_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+       else if (plane == VL_COMPOSITOR_PLANE_UV)
+          s->layers[layer].cs = c->cs_rgb_yuv.uv;
+    } else if (c->pipe_gfx_supported)
+-      s->layers[layer].fs = y ? c->fs_rgb_yuv.y : c->fs_rgb_yuv.uv;
++      s->layers[layer].fs = y ? c->fs_rgb_yuv.y :
++                            plane == VL_COMPOSITOR_PLANE_V ? c->fs_rgb_yuv.v : c->fs_rgb_yuv.uv;
+ 
+    s->layers[layer].samplers[0] = c->sampler_linear;
+    s->layers[layer].samplers[1] = NULL;
+diff --git a/src/gallium/auxiliary/vl/vl_compositor.h b/src/gallium/auxiliary/vl/vl_compositor.h
+index f2eb5d2f90a0..3df7db5be836 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor.h
++++ b/src/gallium/auxiliary/vl/vl_compositor.h
+@@ -176,10 +176,12 @@ struct vl_compositor
+       struct {
+          void *y;
+          void *uv;
++         void *v;
+       } weave;
+       struct {
+          void *y;
+          void *uv;
++         void *v;
+       } bob;
+    } fs_yuv;
+ 
+@@ -204,6 +206,7 @@ struct vl_compositor
+    struct {
+       void *y;
+       void *uv;
++      void *v;
+    } fs_rgb_yuv;
+ 
+    struct {
+diff --git a/src/gallium/auxiliary/vl/vl_compositor_gfx.c b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
+index 655d562bb4fe..bb45835bee95 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor_gfx.c
++++ b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
+@@ -302,7 +302,7 @@ create_frag_shader_weave_rgb(struct vl_compositor *c)
+ }
+ 
+ void *
+-create_frag_shader_deint_yuv(struct vl_compositor *c, bool y, bool w)
++create_frag_shader_deint_yuv(struct vl_compositor *c, enum vl_compositor_plane plane, bool w)
+ {
+    struct ureg_program *shader;
+    struct ureg_dst texel, fragment;
+@@ -319,8 +319,11 @@ create_frag_shader_deint_yuv(struct vl_compositor *c, bool y, bool w)
+    else
+       create_frag_shader_yuv(shader, texel);
+ 
+-   if (y)
++   if (plane == VL_COMPOSITOR_PLANE_Y)
+       ureg_MOV(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X), ureg_src(texel));
++   else if (plane == VL_COMPOSITOR_PLANE_V)
++      ureg_MOV(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X),
++               ureg_scalar(ureg_src(texel), TGSI_SWIZZLE_Z));
+    else
+       ureg_MOV(shader, ureg_writemask(fragment, TGSI_WRITEMASK_XY),
+                        ureg_swizzle(ureg_src(texel), TGSI_SWIZZLE_Y,
+@@ -425,7 +428,7 @@ create_frag_shader_rgba(struct vl_compositor *c)
+ }
+ 
+ void *
+-create_frag_shader_rgb_yuv(struct vl_compositor *c, bool y)
++create_frag_shader_rgb_yuv(struct vl_compositor *c, enum vl_compositor_plane plane)
+ {
+    struct ureg_program *shader;
+    struct ureg_src tc, sampler;
+@@ -448,8 +451,10 @@ create_frag_shader_rgb_yuv(struct vl_compositor *c, bool y)
+ 
+    ureg_TEX(shader, texel, TGSI_TEXTURE_2D, tc, sampler);
+ 
+-   if (y) {
++   if (plane == VL_COMPOSITOR_PLANE_Y) {
+       ureg_DP4(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X), csc[0], ureg_src(texel));
++   } else if (plane == VL_COMPOSITOR_PLANE_V) {
++      ureg_DP4(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X), csc[2], ureg_src(texel));
+    } else {
+       for (i = 0; i < 2; ++i)
+          ureg_DP4(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X << i), csc[i + 1], ureg_src(texel));
+diff --git a/src/gallium/auxiliary/vl/vl_compositor_gfx.h b/src/gallium/auxiliary/vl/vl_compositor_gfx.h
+index c274816ced22..81dfff258506 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor_gfx.h
++++ b/src/gallium/auxiliary/vl/vl_compositor_gfx.h
+@@ -52,9 +52,9 @@ create_frag_shader_weave_rgb(struct vl_compositor *c);
+  * create YCbCr i-to-YCbCr p deint fragment shader
+  */
+ void *
+-create_frag_shader_deint_yuv(struct vl_compositor *c,
+-                             bool                  y,
+-                             bool                  w);
++create_frag_shader_deint_yuv(struct vl_compositor    *c,
++                             enum vl_compositor_plane plane,
++                             bool                     w);
+ 
+ /**
+  * create YUV/RGB-Palette-to-RGB fragment shader
+@@ -73,8 +73,8 @@ create_frag_shader_rgba(struct vl_compositor *c);
+  * create RGB-to-YUV fragment shader
+  */
+ void *
+-create_frag_shader_rgb_yuv(struct vl_compositor *c,
+-                           bool                  y);
++create_frag_shader_rgb_yuv(struct vl_compositor    *c,
++                           enum vl_compositor_plane plane);
+ 
+ /**
+  * render the layers to the frontbuffer with graphic shader
+-- 
+GitLab
+
+
+From 82cd6f90587348d20efffcd059e71d93019c62bb Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Tue, 20 Oct 2026 09:21:18 +0200
+Subject: [PATCH 09/10] nouveau: pass chroma_format_idc to the vp3 H.264
+ decoder
+
+The H.264 picture parameters for BSP and VP both have a
+chroma_format_idc field, but nouveau always sets 4:2:0 (in the BSP
+structure the field was still called unk00). Monochrome streams, which
+the High profile allows, are then parsed as if they carried chroma, and
+every picture comes out wrong, luma included.
+
+Pass the stream's value to both engines. With 4:0:0 the decoder leaves
+the chroma planes alone, and the VA frontend clears them to grey when
+it allocates the surface.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 4 ++--
+ src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c  | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+index 7f79cfe6dcc5..ece6cf56fb39 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+@@ -69,7 +69,7 @@ struct vc1_picparm_bsp {
+ 
+ struct h264_picparm_bsp {
+    // 00
+-   uint32_t unk00;
++   uint32_t chroma_format_idc;
+    // 04
+    uint32_t log2_max_frame_num_minus4; // 04 checked
+    uint32_t pic_order_cnt_type; // 08 checked
+@@ -168,7 +168,7 @@ nouveau_vp3_fill_picparm_h264_bsp(struct nouveau_vp3_decoder *dec,
+       caps |= 1 << 20;
+ 
+    assert(offsetof(struct h264_picparm_bsp, bottom_field_flag) == (0x39 + 0x24));
+-   h->unk00 = 1;
++   h->chroma_format_idc = d->pps->sps->chroma_format_idc;
+    h->pad1 = h->pad2 = 0;
+    h->unk = 0;
+    h->log2_max_frame_num_minus4 = d->pps->sps->log2_max_frame_num_minus4;
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 237f9e1c028c..45458dbb15de 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -261,7 +261,7 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+    h->second_field = 0; // set in nouveau_vp3_fill_picparm_h264_vp_refs
+ 
+    h->log2_max_frame_num_minus4 = d->pps->sps->log2_max_frame_num_minus4;
+-   h->chroma_format_idc = 1;
++   h->chroma_format_idc = d->pps->sps->chroma_format_idc;
+ 
+    h->pic_order_cnt_type = d->pps->sps->pic_order_cnt_type;
+    h->pic_init_qp_minus26 = d->pps->pic_init_qp_minus26;
+-- 
+GitLab
+
+
+From 3eb3b967b6b3483dced4e29e16886f62012384cc Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Tue, 20 Oct 2026 09:21:19 +0200
+Subject: [PATCH 10/10] nouveau: tell the vp3 H.264 decoder whether a picture
+ is MBAFF
+
+BSP and VP take mb_adaptive_frame_field_flag from the SPS, but MBAFF
+only applies to frame pictures: the field pictures of a stream that
+enables it are not MBAFF coded. The decoder reads them as if they were,
+so streams that mix field pictures and MBAFF frames, as interlaced
+broadcasts do, decode into blocks and garbage.
+
+Pass MbaffFrameFlag instead: the SPS flag for frames, 0 for fields.
+
+Backport-to: *
+Tested-by: Kush Chandak <kushc451@gmail.com>
+Generated-by: Claude Code (Claude Opus 5.5)
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 3 ++-
+ src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c  | 3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+index ece6cf56fb39..a81090b575d3 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+@@ -189,7 +189,8 @@ nouveau_vp3_fill_picparm_h264_bsp(struct nouveau_vp3_decoder *dec,
+    h->deblocking_filter_control_present_flag = d->pps->deblocking_filter_control_present_flag;
+    h->redundant_pic_cnt_present_flag = d->pps->redundant_pic_cnt_present_flag;
+    h->transform_8x8_mode_flag = d->pps->transform_8x8_mode_flag;
+-   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag;
++   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag &&
++                                     !d->field_pic_flag;
+    h->field_pic_flag = d->field_pic_flag;
+    h->bottom_field_flag = d->bottom_field_flag;
+    memset(h->real_pad, 0, sizeof(h->real_pad));
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 45458dbb15de..00d521c49341 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -251,7 +251,8 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+    nouveau_vp3_inter_sizes(dec, d->slice_count, &ring, &h->bucket_size, &h->inter_ring_data_size);
+ 
+    h->u220 = 0;
+-   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag;
++   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag &&
++                                     !d->field_pic_flag;
+    h->direct_8x8_inference_flag = d->pps->sps->direct_8x8_inference_flag;
+    h->weighted_pred_flag = d->pps->weighted_pred_flag;
+    h->constrained_intra_pred_flag = d->pps->constrained_intra_pred_flag;
+-- 
+GitLab
+
