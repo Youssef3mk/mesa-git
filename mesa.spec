@@ -1,37 +1,28 @@
 # mesa.spec
 %global source_date_epoch_from_changelog 0
-# Since we're only building for x86_64 and i386, we can simplify these conditionals
 %global with_hardware 1
-%global with_radeonsi 0
-%global with_vmware 0
-%global with_vulkan_hw 1
-%global with_va 1
-%if !0%{?rhel}
-%global with_r300 0
-%global with_r600 0
-%global with_nvk %{with_vulkan_hw}
-%global with_opencl 1
-%endif
-%global base_vulkan %{!?with_vulkan_hw:%{nil}}
 
-# Intel-specific features (available on both x86_64 and i386)
-%global with_crocus 0
-%global with_i915   1
-%global with_iris   0
-%global with_intel_clc 1
-%global intel_platform_vulkan %{?with_vulkan_hw:,intel,intel_hasvk}%{!?with_vulkan_hw:%{nil}}
+# Hardware Driver Flags (Only requested drivers enabled)
+%global with_i915       1
+%global with_nvk        1
+%global with_opencl     1
+%global with_va         1
 
-# Ray tracing only on x86_64
-%ifarch x86_64
-%global with_intel_vk_rt 1
-%endif
-
-# No need for ARM-specific features like freedreno, panfrost, etc.
-%global with_d3d12 1
+# Disabled unwanted drivers & features
+%global with_crocus     0
+%global with_iris       0
+%global with_radeonsi   0
+%global with_r300       0
+%global with_r600       0
+%global with_vmware     0
+%global with_d3d12      0
+%global with_vulkan_hw  0
+%global with_intel_clc  0
+%global with_intel_vk_rt 0
 
 %if !0%{?rhel}
-%global with_libunwind 1
-%global with_lmsensors 1
+%global with_libunwind  1
+%global with_lmsensors  1
 %endif
 
 %ifarch %{valgrind_arches}
@@ -40,24 +31,23 @@
 %bcond_with valgrind
 %endif
 
-%global vulkan_drivers swrast,virtio%{?with_vulkan_hw:,amd,intel,intel_hasvk}%{?with_nvk:,nouveau}%{?with_d3d12:,microsoft-experimental}
+# Set vulkan drivers to NVK (nouveau) only + swrast
+%global vulkan_drivers swrast,nouveau
 
-## additional functionality not in the fedora standard packages
-%global with_vulkan_overlay 0
-%global with_gallium_extra_hud 0
-%global with_vulkan_beta 0
+## additional functionality
+%global with_vulkan_overlay 1
+%global with_gallium_extra_hud 1
+%global with_vulkan_beta 1
 %global with_gpuvis 0
 %global with_spirv_to_dxil 0
 %global with_mesa_tools 0
-%global with_xlib_lease 0
+%global with_xlib_lease 1
 
 %global commit 1d4b5ef4a5562b6e2dba2cb5aacd60787979ba86
-
 %global shortcommit 1d4b5ef
 
-
 Name:           mesa
-Summary:        Mesa graphics libraries
+Summary:        Mesa graphics libraries (Custom build: i915, nvk, rusticl, nouveau, va)
 Version:        28.8
 Release:        0.26111.git%{shortcommit}%{?dist}
 
@@ -65,7 +55,7 @@ License:        MIT AND BSD-3-Clause AND SGI-B-2.0
 URL:            http://www.mesa3d.org
 
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
-Patch0:        sum.patch
+Patch0:         sum.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -113,27 +103,22 @@ BuildRequires:  flex
 BuildRequires:  lm_sensors-devel
 %endif
 
-%if 0%{?with_d3d12}
-BuildRequires:  pkgconfig(DirectX-Headers) >= 1.610.1
-%endif
 %if 0%{?with_va}
 BuildRequires:  pkgconfig(libva) >= 0.38.0
 %endif
 BuildRequires:  pkgconfig(libelf)
 BuildRequires:  pkgconfig(libglvnd) >= 1.3.2
 BuildRequires:  llvm-devel >= 7.0.0
-%if 0%{?with_opencl} || 0%{?with_nvk} || 0%{?with_intel_clc}
+
+# Dependencies for OpenCL (Rusticl) & NVK (Rust-based driver)
+%if 0%{?with_opencl} || 0%{?with_nvk}
 BuildRequires:  clang-devel
 BuildRequires:  pkgconfig(libclc)
 BuildRequires:  pkgconfig(SPIRV-Tools)
 BuildRequires:  pkgconfig(LLVMSPIRVLib)
-%endif
-%if 0%{?with_opencl} || 0%{?with_nvk}
 BuildRequires:  bindgen
 BuildRequires:  rust-packaging
 BuildRequires:  rustfmt
-%endif
-%if 0%{?with_nvk}
 BuildRequires:  cbindgen
 BuildRequires:  (crate(paste/default) >= 1.0.14 with crate(paste/default) < 2)
 BuildRequires:  (crate(proc-macro2) >= 1.0.56 with crate(proc-macro2) < 2)
@@ -142,14 +127,12 @@ BuildRequires:  (crate(syn/clone-impls) >= 2.0.15 with crate(syn/clone-impls) < 
 BuildRequires:  (crate(unicode-ident) >= 1.0.6 with crate(unicode-ident) < 2)
 BuildRequires:  (crate(rustc-hash) >= 2.0.0 with crate(rustc-hash) < 3)
 %endif
+
 %if %{with valgrind}
 BuildRequires:  pkgconfig(valgrind)
 %endif
 BuildRequires:  python3-devel
 BuildRequires:  python3-mako
-%if 0%{?with_intel_clc}
-BuildRequires:  python3-ply
-%endif
 BuildRequires:  python3-pycparser
 BuildRequires:  python3-pyyaml
 BuildRequires:  vulkan-headers
@@ -157,10 +140,7 @@ BuildRequires:  glslang
 BuildRequires:  pkgconfig(libpng)
 BuildRequires:  pkgconfig(epoxy)
 BuildRequires:  pkgconfig(gtk+-3.0)
-%if 0%{?with_vulkan_hw}
-BuildRequires:  pkgconfig(vulkan)
-%endif
-BuildRequires:  cmake git DirectX-Headers-devel >= 1.618.1
+BuildRequires:  cmake git
 
 %description
 %{summary}.
@@ -168,8 +148,6 @@ BuildRequires:  cmake git DirectX-Headers-devel >= 1.618.1
 %package filesystem
 Summary:        Mesa driver filesystem
 Provides:       mesa-dri-filesystem = %{?epoch:%{epoch}:}%{version}-%{release}
-Obsoletes:      mesa-omx-drivers < %{?epoch:%{epoch}:}%{version}-%{release}
-Obsoletes:      mesa-libglapi < %{?epoch:%{epoch}:}%{version}-%{release}
 
 %description filesystem
 %{summary}.
@@ -188,7 +166,6 @@ Requires:       %{name}-libGL%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 Requires:       libglvnd-devel%{?_isa} >= 1:1.3.2
 Provides:       libGL-devel
 Provides:       libGL-devel%{?_isa}
-Recommends:     gl-manpages
 
 %description libGL-devel
 %{summary}.
@@ -197,8 +174,6 @@ Recommends:     gl-manpages
 Summary:        Mesa libEGL runtime libraries
 Requires:       libglvnd-egl%{?_isa} >= 1:1.3.2
 Requires:       %{name}-libgbm%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-Recommends:     %{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-Obsoletes:      libOSMesa < %{?epoch:%{epoch}:}%{version}-%{release}
 
 %description libEGL
 %{summary}.
@@ -207,16 +182,14 @@ Obsoletes:      libOSMesa < %{?epoch:%{epoch}:}%{version}-%{release}
 Summary:        Mesa libEGL development package
 Requires:       %{name}-libEGL%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 Requires:       libglvnd-devel%{?_isa} >= 1:1.3.2
-Requires:       %{name}-khr-devel%{?_isa}
 Provides:       libEGL-devel
 Provides:       libEGL-devel%{?_isa}
-Obsoletes:      libOSMesa-devel < %{?epoch:%{epoch}:}%{version}-%{release}
 
 %description libEGL-devel
 %{summary}.
 
 %package dri-drivers
-Summary:        Mesa-based DRI drivers
+Summary:        Mesa-based DRI drivers (i915, nouveau)
 Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 %if 0%{?with_va}
 Recommends:     %{name}-va-drivers%{?_isa}
@@ -229,7 +202,6 @@ Recommends:     %{name}-va-drivers%{?_isa}
 %package va-drivers
 Summary:        Mesa-based VA-API video acceleration drivers
 Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-Obsoletes:      %{name}-vaapi-drivers < 22.3.0-0.24
 
 %description va-drivers
 %{summary}.
@@ -239,8 +211,6 @@ Obsoletes:      %{name}-vaapi-drivers < 22.3.0-0.24
 Summary:        Mesa gbm runtime library
 Provides:       libgbm
 Provides:       libgbm%{?_isa}
-Recommends:     %{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-Requires:       (%{name}-dri-drivers%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release} if %{name}-dri-drivers%{?_isa})
 
 %description libgbm
 %{summary}.
@@ -256,7 +226,7 @@ Provides:       libgbm-devel%{?_isa}
 
 %if 0%{?with_opencl}
 %package libOpenCL
-Summary:        Mesa OpenCL runtime library
+Summary:        Mesa Rusticl OpenCL runtime library
 Requires:       ocl-icd%{?_isa}
 Requires:       libclc%{?_isa}
 Requires:       %{name}-libgbm%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
@@ -274,31 +244,17 @@ Requires:       %{name}-libOpenCL%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{rele
 %endif
 
 %package vulkan-drivers
-Summary:        Mesa Vulkan drivers
+Summary:        Mesa NVK Vulkan driver
 Requires:       vulkan%{_isa}
 Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-Obsoletes:      mesa-vulkan-devel < %{?epoch:%{epoch}:}%{version}-%{release}
 
 %description vulkan-drivers
-The drivers with support for the Vulkan API.
-
-%package libdisplay-info
-Summary:        Display information library for Mesa
-Requires:       %{name}-filesystem%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-%description libdisplay-info
-Library for parsing EDID and other display-related information.
-
-%package libdisplay-info-devel
-Summary:        Development files for libdisplay-info
-Requires:       %{name}-libdisplay-info%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
-%description libdisplay-info-devel
-Development files for the libdisplay-info library.
+NVIDIA NVK Vulkan driver and software rast driver.
 
 %prep
 %autosetup -n mesa-%{commit} -p1
 
 %build
-# Ensure standard Rust compiler flags are set
 export RUSTFLAGS="%build_rustflags"
 
 %if 0%{?with_nvk}
@@ -329,18 +285,23 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 %rewrite_wrap_file rustc-hash
 %endif
 
-# Disable LTO to avoid potential issues
 %define _lto_cflags %{nil}
 
 %meson \
   -Dplatforms=x11,wayland \
-  -Dgallium-drivers=llvmpipe,nouveau%{?with_i915:,i915}%{?with_vulkan_hw:,zink} \
+  -Dgallium-drivers=softpipe,llvmpipe,i915,nouveau \
+  -Dgallium-d3d12-video=disabled \
   --wrap-mode=default \
+  -Dandroid-libbacktrace=disabled \
+  -Dgallium-d3d12-graphics=disabled \
   -Dgallium-va=%{?with_va:enabled}%{!?with_va:disabled} \
   -Dgallium-rusticl=%{?with_opencl:true}%{!?with_opencl:false} \
   -Dgallium-mediafoundation=disabled \
   -Dgallium-extra-hud=%{?with_gallium_extra_hud:true}%{!?with_gallium_extra_hud:false} \
   -Dvulkan-drivers=%{vulkan_drivers} \
+  -Dvulkan-layers=device-select,overlay \
+  -Dvulkan-beta=%{?with_vulkan_beta:true}%{!?with_vulkan_beta:false} \
+  -Dxlib-lease=%{?with_xlib_lease:enabled}%{!?with_xlib_lease:disabled} \
   -Dgles1=enabled \
   -Dgles2=enabled \
   -Dopengl=true \
@@ -348,8 +309,11 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
   -Dglx=dri \
   -Degl=enabled \
   -Dglvnd=enabled \
+  -Dintel-rt=disabled \
+  -Dmicrosoft-clc=disabled \
   -Dllvm=enabled \
   -Dshared-llvm=enabled \
+  -Dvalgrind=%{?with_valgrind:enabled}%{!?with_valgrind:disabled} \
   -Dbuild-tests=false \
   -Dvideo-codecs=all \
 %if !0%{?with_libunwind}
@@ -358,9 +322,6 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 %if !0%{?with_lmsensors}
   -Dlmsensors=disabled \
 %endif
-%ifarch %{ix86}
-  -Dglx-read-only-text=true \
-%endif
   %{nil}
 
 %meson_build
@@ -368,19 +329,11 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 %install
 %meson_install
 
-# likewise glvnd
 rm -vf %{buildroot}%{_libdir}/libGLX_mesa.so
 rm -vf %{buildroot}%{_libdir}/libEGL_mesa.so
 rm -vf %{buildroot}%{_libdir}/libGLES*
 
-# glvnd needs a default provider for indirect rendering
 ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
-
-pushd %{buildroot}%{_libdir}
-for i in libGL*.so ; do
-    eu-findtextrel $i && exit 1
-done
-popd
 
 %files filesystem
 %dir %{_libdir}/dri
@@ -429,63 +382,20 @@ popd
 %{_libdir}/libgallium-*.so
 %{_libdir}/gbm/dri_gbm.so
 %{_libdir}/dri/kms_swrast_dri.so
-%{_libdir}/dri/libdril_dri.so
 %{_libdir}/dri/swrast_dri.so
-%{_libdir}/dri/virtio_gpu_dri.so
-%exclude %{_libdir}/dri/apple_dri.so
-%exclude %{_libdir}/dri/armada-drm_dri.so
-%if 0%{?with_d3d12}
-%{_libdir}/dri/d3d12_dri.so
-%endif
-%{_libdir}/dri/crocus_dri.so
 %{_libdir}/dri/i915_dri.so
-%{_libdir}/dri/iris_dri.so
 %{_libdir}/dri/nouveau_dri.so
-%if 0%{?with_vulkan_hw}
-%{_libdir}/dri/zink_dri.so
-%endif
 
 %if 0%{?with_va}
 %files va-drivers
-%if 0%{?with_d3d12}
-%{_libdir}/dri/d3d12_drv_video.so
-%endif
 %{_libdir}/dri/nouveau_drv_video.so
-%{_libdir}/dri/virtio_gpu_drv_video.so
 %endif
 
 %files vulkan-drivers
 %{_libdir}/libvulkan_lvp.so
 %{_datadir}/vulkan/icd.d/lvp_icd.*.json
-%{_libdir}/libvulkan_virtio.so
-%{_datadir}/vulkan/icd.d/virtio_icd.*.json
-%{_libdir}/libVkLayer_MESA_device_select.so
-%{_datadir}/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json
-%{_libdir}/libVkLayer_INTEL_nullhw.so
-%{_datadir}/vulkan/explicit_layer.d/VkLayer_INTEL_nullhw.json
-%{_libdir}/libVkLayer_MESA_screenshot.so
-%{_datadir}/vulkan/explicit_layer.d/VkLayer_MESA_screenshot.json
-%if 0%{?with_d3d12}
-%{_bindir}/spirv2dxil
-%{_libdir}/libspirv_to_dxil.so
-%{_libdir}/libspirv_to_dxil.a
-%{_libdir}/libvulkan_dzn.so
-%{_datadir}/vulkan/icd.d/dzn_icd.*.json
-%{_libdir}/clon12compiler.so
-%endif
-%if 0%{?with_vulkan_hw}
-%{_libdir}/libvulkan_radeon.so
-%{_datadir}/drirc.d/00-radv-defaults.conf
-%{_datadir}/vulkan/icd.d/radeon_icd.*.json
-%if 0%{?with_nvk}
 %{_libdir}/libvulkan_nouveau.so
 %{_datadir}/vulkan/icd.d/nouveau_icd.*.json
-%endif
-%{_libdir}/libvulkan_intel.so
-%{_datadir}/vulkan/icd.d/intel_icd.*.json
-%{_libdir}/libvulkan_intel_hasvk.so
-%{_datadir}/vulkan/icd.d/intel_hasvk_icd.*.json
-%endif
 
 %if 0%{?with_vulkan_overlay}
 %{_bindir}/mesa-overlay-control.py
