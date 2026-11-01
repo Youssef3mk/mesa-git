@@ -41,6 +41,7 @@
 %endif
 
 %global vulkan_drivers swrast,virtio%{?with_vulkan_hw:,amd,intel,intel_hasvk}%{?with_nvk:,nouveau}%{?with_d3d12:,microsoft-experimental}
+
 ## additional functionality not in the fedora standard packages
 %global with_vulkan_overlay 0
 %global with_gallium_extra_hud 0
