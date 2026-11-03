@@ -388,7 +388,8 @@ ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 %{_libdir}/dri/i915_dri.so
 %{_libdir}/dri/nouveau_dri.so
 %{_libdir}/dri/zink_dri.so
-
+%{_libdir}/dri/*_dri.so
+%{_libdir}/dri/*_drv_video.so
 %if 0%{?with_va}
 %files va-drivers
 %{_libdir}/dri/nouveau_drv_video.so
