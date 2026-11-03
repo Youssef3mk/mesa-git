@@ -56,6 +56,7 @@ URL:            http://www.mesa3d.org
 
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Patch0:         sum.patch
+Patch1:         vk.patch
 
 BuildRequires:  meson >= 1.7.0
 BuildRequires:  gcc
@@ -289,7 +290,7 @@ export MESON_PACKAGE_CACHE_DIR="%{cargo_registry}/"
 
 %meson \
   -Dplatforms=x11,wayland \
-  -Dgallium-drivers=softpipe,llvmpipe,i915,nouveau \
+  -Dgallium-drivers=softpipe,llvmpipe,i915,nouveau,zink \
   -Dgallium-d3d12-video=disabled \
   --wrap-mode=default \
   -Dandroid-libbacktrace=disabled \
@@ -386,6 +387,7 @@ ln -s libGLX_mesa.so.0 %{buildroot}%{_libdir}/libGLX_system.so.0
 %{_libdir}/dri/swrast_dri.so
 %{_libdir}/dri/i915_dri.so
 %{_libdir}/dri/nouveau_dri.so
+%{_libdir}/dri/zink_dri.so
 
 %if 0%{?with_va}
 %files va-drivers
