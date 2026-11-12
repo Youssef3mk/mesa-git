@@ -1,8 +1,8 @@
-From 5645fb692234a0eb62bb4fab0edfe6a82f7c381e Mon Sep 17 00:00:00 2001
+From 8ce6682fcf7fac42c1ba57c40341539576481bd9 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sun, 18 Oct 2026 19:07:22 +0200
-Subject: [PATCH 01/10] nv50: size surface views by blocks when the block size
+Subject: [PATCH 01/13] nv50: size surface views by blocks when the block size
  differs
 
 The VA frontend clears YUYV and UYVY video buffers, whose R8G8_R8B8 and
@@ -14,9 +14,10 @@ write past the buffer and raise RT_FAULT traps.
 
 Convert the size to blocks of the view format, as radeonsi does.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
+Reviewed-by: Dave Airlie <airlied@redhat.com>
 ---
  src/gallium/drivers/nouveau/nv50/nv50_miptree.c | 13 +++++++++++++
  1 file changed, 13 insertions(+)
@@ -49,11 +50,11 @@ index bcd6e6a5327c..ffd0ecefa592 100644
 GitLab
 
 
-From 20309ed55a1a2e5c327a37cee2cacbce290ef0aa Mon Sep 17 00:00:00 2001
+From 5a62b3d9bb4f318dde3fd2d1a254d9aa4af524b0 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:23 +0200
-Subject: [PATCH 02/10] nv50,nvc0: don't read pipe_surface templates as
+Subject: [PATCH 02/13] nv50,nvc0: don't read pipe_surface templates as
  nv50_surface in clears
 
 get_surfaces() in the VA frontend returns plain pipe_surface templates,
@@ -67,35 +68,36 @@ Create the driver surface from the template in the hooks. nv84_video.c
 passes a real nv50_surface, so it calls the internal helper directly.
 
 Fixes: 718e277ab56e ("util/surface: delete more pipe_context::create_surface usage")
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
+Reviewed-by: Dave Airlie <airlied@redhat.com>
 ---
  .../drivers/nouveau/nv50/nv50_context.h       |  6 ++
- .../drivers/nouveau/nv50/nv50_surface.c       | 70 +++++++++++++----
+ .../drivers/nouveau/nv50/nv50_surface.c       | 71 +++++++++++++----
  src/gallium/drivers/nouveau/nv50/nv84_video.c |  6 +-
- .../drivers/nouveau/nvc0/nvc0_surface.c       | 76 +++++++++++++++----
- 4 files changed, 126 insertions(+), 32 deletions(-)
+ .../drivers/nouveau/nvc0/nvc0_surface.c       | 77 +++++++++++++++----
+ 4 files changed, 128 insertions(+), 32 deletions(-)
 
 diff --git a/src/gallium/drivers/nouveau/nv50/nv50_context.h b/src/gallium/drivers/nouveau/nv50/nv50_context.h
-index c7114f4b8db3..2ecc797e1f65 100644
+index c7114f4b8db3..7649ec90fc7c 100644
 --- a/src/gallium/drivers/nouveau/nv50/nv50_context.h
 +++ b/src/gallium/drivers/nouveau/nv50/nv50_context.h
 @@ -318,6 +318,12 @@ extern void nv50_clear(struct pipe_context *, unsigned buffers,
                         const struct pipe_scissor_state *scissor_state,
                         const union pipe_color_union *color,
                         double depth, unsigned stencil);
-+extern void nv50_clear_render_target_sf(struct pipe_context *,
-+                                        struct nv50_surface *,
-+                                        const union pipe_color_union *color,
-+                                        unsigned dstx, unsigned dsty,
-+                                        unsigned width, unsigned height,
-+                                        bool render_condition_enabled);
++extern void nv50_clear_render_target_internal(struct pipe_context *,
++                                              struct nv50_surface *,
++                                              const union pipe_color_union *color,
++                                              unsigned dstx, unsigned dsty,
++                                              unsigned width, unsigned height,
++                                              bool render_condition_enabled);
  extern void nv50_init_surface_functions(struct nv50_context *);
  
  /* nv50_tex.c */
 diff --git a/src/gallium/drivers/nouveau/nv50/nv50_surface.c b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
-index 1c1e73758f16..959433e637b8 100644
+index 1c1e73758f16..e834011be98c 100644
 --- a/src/gallium/drivers/nouveau/nv50/nv50_surface.c
 +++ b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
 @@ -276,18 +276,18 @@ nv50_resource_copy_region(struct pipe_context *pipe,
@@ -110,12 +112,12 @@ index 1c1e73758f16..959433e637b8 100644
 -                         unsigned width, unsigned height,
 -                         bool render_condition_enabled)
 +void
-+nv50_clear_render_target_sf(struct pipe_context *pipe,
-+                            struct nv50_surface *sf,
-+                            const union pipe_color_union *color,
-+                            unsigned dstx, unsigned dsty,
-+                            unsigned width, unsigned height,
-+                            bool render_condition_enabled)
++nv50_clear_render_target_internal(struct pipe_context *pipe,
++                                  struct nv50_surface *sf,
++                                  const union pipe_color_union *color,
++                                  unsigned dstx, unsigned dsty,
++                                  unsigned width, unsigned height,
++                                  bool render_condition_enabled)
  {
     struct nv50_context *nv50 = nv50_context(pipe);
     struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -125,7 +127,7 @@ index 1c1e73758f16..959433e637b8 100644
     struct nouveau_bo *bo = mt->base.bo;
     unsigned z;
  
-@@ -365,20 +365,43 @@ nv50_clear_render_target(struct pipe_context *pipe,
+@@ -365,20 +365,44 @@ nv50_clear_render_target(struct pipe_context *pipe,
     nv50->dirty_3d |= NV50_NEW_3D_FRAMEBUFFER | NV50_NEW_3D_SCISSOR;
  }
  
@@ -151,20 +153,21 @@ index 1c1e73758f16..959433e637b8 100644
 +   if (!ps)
 +      return;
 +
-+   nv50_clear_render_target_sf(pipe, nv50_surface(ps), color, dstx, dsty,
-+                               width, height, render_condition_enabled);
++   nv50_clear_render_target_internal(pipe, nv50_surface(ps), color,
++                                     dstx, dsty, width, height,
++                                     render_condition_enabled);
 +   nv50_surface_destroy(pipe, ps);
 +}
 +
 +static void
-+nv50_clear_depth_stencil_sf(struct pipe_context *pipe,
-+                            struct nv50_surface *sf,
-+                            unsigned clear_flags,
-+                            double depth,
-+                            unsigned stencil,
-+                            unsigned dstx, unsigned dsty,
-+                            unsigned width, unsigned height,
-+                            bool render_condition_enabled)
++nv50_clear_depth_stencil_internal(struct pipe_context *pipe,
++                                  struct nv50_surface *sf,
++                                  unsigned clear_flags,
++                                  double depth,
++                                  unsigned stencil,
++                                  unsigned dstx, unsigned dsty,
++                                  unsigned width, unsigned height,
++                                  bool render_condition_enabled)
  {
     struct nv50_context *nv50 = nv50_context(pipe);
     struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -174,7 +177,7 @@ index 1c1e73758f16..959433e637b8 100644
     struct nouveau_bo *bo = mt->base.bo;
     uint32_t mode = 0;
     unsigned z;
-@@ -453,6 +476,27 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
+@@ -453,6 +477,27 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
     nv50->dirty_3d |= NV50_NEW_3D_FRAMEBUFFER | NV50_NEW_3D_SCISSOR;
  }
  
@@ -193,9 +196,9 @@ index 1c1e73758f16..959433e637b8 100644
 +   if (!ps)
 +      return;
 +
-+   nv50_clear_depth_stencil_sf(pipe, nv50_surface(ps), clear_flags, depth,
-+                               stencil, dstx, dsty, width, height,
-+                               render_condition_enabled);
++   nv50_clear_depth_stencil_internal(pipe, nv50_surface(ps), clear_flags,
++                                     depth, stencil, dstx, dsty, width, height,
++                                     render_condition_enabled);
 +   nv50_surface_destroy(pipe, ps);
 +}
 +
@@ -203,7 +206,7 @@ index 1c1e73758f16..959433e637b8 100644
  nv50_clear(struct pipe_context *pipe, unsigned buffers,
             uint32_t color_clear_mask, uint8_t stencil_clear_mask,
 diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.c b/src/gallium/drivers/nouveau/nv50/nv84_video.c
-index a7cb4e0e7319..09229cdc33bf 100644
+index a7cb4e0e7319..3b9cf51fc284 100644
 --- a/src/gallium/drivers/nouveau/nv50/nv84_video.c
 +++ b/src/gallium/drivers/nouveau/nv50/nv84_video.c
 @@ -484,16 +484,16 @@ nv84_create_decoder(struct pipe_context *context,
@@ -211,7 +214,7 @@ index a7cb4e0e7319..09229cdc33bf 100644
        mip.base.bo = dec->mbring;
        mip.base.address = dec->mbring->offset;
 -      context->clear_render_target(context, &surf.base, &color, 0, 0, 64, 4760, false);
-+      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 64, 4760, false);
++      nv50_clear_render_target_internal(context, &surf, &color, 0, 0, 64, 4760, false);
        surf.offset = dec->vpring->size / 2 - 0x1000;
        surf.width = 1024;
        surf.height = 1;
@@ -219,15 +222,15 @@ index a7cb4e0e7319..09229cdc33bf 100644
        mip.base.bo = dec->vpring;
        mip.base.address = dec->vpring->offset;
 -      context->clear_render_target(context, &surf.base, &color, 0, 0, 1024, 1, false);
-+      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 1024, 1, false);
++      nv50_clear_render_target_internal(context, &surf, &color, 0, 0, 1024, 1, false);
        surf.offset = dec->vpring->size - 0x1000;
 -      context->clear_render_target(context, &surf.base, &color, 0, 0, 1024, 1, false);
-+      nv50_clear_render_target_sf(context, &surf, &color, 0, 0, 1024, 1, false);
++      nv50_clear_render_target_internal(context, &surf, &color, 0, 0, 1024, 1, false);
  
        PUSH_SPACE(nv50->base.pushbuf, 5);
        PUSH_REF1(nv50->base.pushbuf, dec->fence, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
 diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
-index 2609a9a85e5f..91e346609266 100644
+index 2609a9a85e5f..a994bfc29937 100644
 --- a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
 +++ b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
 @@ -286,16 +286,16 @@ nvc0_resource_copy_region(struct pipe_context *pipe,
@@ -240,12 +243,12 @@ index 2609a9a85e5f..91e346609266 100644
 -                         unsigned dstx, unsigned dsty,
 -                         unsigned width, unsigned height,
 -                         bool render_condition_enabled)
-+nvc0_clear_render_target_sf(struct pipe_context *pipe,
-+                            struct nv50_surface *sf,
-+                            const union pipe_color_union *color,
-+                            unsigned dstx, unsigned dsty,
-+                            unsigned width, unsigned height,
-+                            bool render_condition_enabled)
++nvc0_clear_render_target_internal(struct pipe_context *pipe,
++                                  struct nv50_surface *sf,
++                                  const union pipe_color_union *color,
++                                  unsigned dstx, unsigned dsty,
++                                  unsigned width, unsigned height,
++                                  bool render_condition_enabled)
  {
     struct nvc0_context *nvc0 = nvc0_context(pipe);
     struct nouveau_pushbuf *push = nvc0->base.pushbuf;
@@ -254,7 +257,7 @@ index 2609a9a85e5f..91e346609266 100644
     struct nv04_resource *res = nv04_resource(sf->base.texture);
     unsigned z;
  
-@@ -369,6 +369,29 @@ nvc0_clear_render_target(struct pipe_context *pipe,
+@@ -369,6 +369,30 @@ nvc0_clear_render_target(struct pipe_context *pipe,
     nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
  }
  
@@ -276,15 +279,16 @@ index 2609a9a85e5f..91e346609266 100644
 +   if (!ps)
 +      return;
 +
-+   nvc0_clear_render_target_sf(pipe, nv50_surface(ps), color, dstx, dsty,
-+                               width, height, render_condition_enabled);
++   nvc0_clear_render_target_internal(pipe, nv50_surface(ps), color,
++                                     dstx, dsty, width, height,
++                                     render_condition_enabled);
 +   nv50_surface_destroy(pipe, ps);
 +}
 +
  static void
  nvc0_clear_buffer_push_nvc0(struct pipe_context *pipe,
                              struct pipe_resource *res,
-@@ -620,19 +643,19 @@ nvc0_clear_buffer(struct pipe_context *pipe,
+@@ -620,19 +644,19 @@ nvc0_clear_buffer(struct pipe_context *pipe,
  }
  
  static void
@@ -296,14 +300,14 @@ index 2609a9a85e5f..91e346609266 100644
 -                         unsigned dstx, unsigned dsty,
 -                         unsigned width, unsigned height,
 -                         bool render_condition_enabled)
-+nvc0_clear_depth_stencil_sf(struct pipe_context *pipe,
-+                            struct nv50_surface *sf,
-+                            unsigned clear_flags,
-+                            double depth,
-+                            unsigned stencil,
-+                            unsigned dstx, unsigned dsty,
-+                            unsigned width, unsigned height,
-+                            bool render_condition_enabled)
++nvc0_clear_depth_stencil_internal(struct pipe_context *pipe,
++                                  struct nv50_surface *sf,
++                                  unsigned clear_flags,
++                                  double depth,
++                                  unsigned stencil,
++                                  unsigned dstx, unsigned dsty,
++                                  unsigned width, unsigned height,
++                                  bool render_condition_enabled)
  {
     struct nvc0_context *nvc0 = nvc0_context(pipe);
     struct nouveau_pushbuf *push = nvc0->base.pushbuf;
@@ -313,7 +317,7 @@ index 2609a9a85e5f..91e346609266 100644
     uint32_t mode = 0;
     int unk = mt->base.base.target == PIPE_TEXTURE_2D;
     unsigned z;
-@@ -691,6 +714,27 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
+@@ -691,6 +715,27 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
     nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
  }
  
@@ -332,9 +336,9 @@ index 2609a9a85e5f..91e346609266 100644
 +   if (!ps)
 +      return;
 +
-+   nvc0_clear_depth_stencil_sf(pipe, nv50_surface(ps), clear_flags, depth,
-+                               stencil, dstx, dsty, width, height,
-+                               render_condition_enabled);
++   nvc0_clear_depth_stencil_internal(pipe, nv50_surface(ps), clear_flags,
++                                     depth, stencil, dstx, dsty, width, height,
++                                     render_condition_enabled);
 +   nv50_surface_destroy(pipe, ps);
 +}
 +
@@ -345,11 +349,406 @@ index 2609a9a85e5f..91e346609266 100644
 GitLab
 
 
-From e6561f146e8cf0ea90a08f74126d105849794b34 Mon Sep 17 00:00:00 2001
+From 20fcb3269e1f2d9ccfcb0de9392d0225019ae694 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 11 Nov 2026 08:52:57 +0100
+Subject: [PATCH 03/13] nv30: don't read pipe_surface templates as nv30_surface
+ in clears
+
+Since 718e277ab56e, util_clear_texture_as_surface() passes the clear
+hooks a pipe_surface template from the stack for glClearTexImage.
+nv30_clear_render_target and nv30_clear_depth_stencil cast it to
+nv30_surface and read width, height, pitch and offset past its end.
+
+Fill an nv30_surface on the stack from the template with a new
+nv30_miptree_surface_init(), which nv30_miptree_surface_new now uses
+too. Build-tested only.
+
+Fixes: 718e277ab56e ("util/surface: delete more pipe_context::create_surface usage")
+Cc: mesa-stable
+Generated-by: LLM
+Reviewed-by: Dave Airlie <airlied@redhat.com>
+---
+ src/gallium/drivers/nouveau/nv30/nv30_clear.c | 15 ++++++--
+ .../drivers/nouveau/nv30/nv30_miptree.c       | 35 ++++++++++++-------
+ .../drivers/nouveau/nv30/nv30_resource.h      |  4 +++
+ 3 files changed, 39 insertions(+), 15 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nv30/nv30_clear.c b/src/gallium/drivers/nouveau/nv30/nv30_clear.c
+index 0ddcd5a237cf..c023ac83f645 100644
+--- a/src/gallium/drivers/nouveau/nv30/nv30_clear.c
++++ b/src/gallium/drivers/nouveau/nv30/nv30_clear.c
+@@ -121,6 +121,11 @@ nv30_clear(struct pipe_context *pipe, unsigned buffers,
+    nv30->state.scissor_off = 0;
+ }
+ 
++/* Callers may pass a plain pipe_surface template, such as the one
++ * util_clear_texture_as_surface builds on the stack, rather than a surface
++ * made by nv30_miptree_surface_new. Reading nv30_surface fields from a
++ * template reads past its end, so fill the driver surface here.
++ */
+ static void
+ nv30_clear_render_target(struct pipe_context *pipe, struct pipe_surface *ps,
+                          const union pipe_color_union *color,
+@@ -128,12 +133,15 @@ nv30_clear_render_target(struct pipe_context *pipe, struct pipe_surface *ps,
+                          bool render_condition_enabled)
+ {
+    struct nv30_context *nv30 = nv30_context(pipe);
+-   struct nv30_surface *sf = nv30_surface(ps);
++   struct nv30_surface surf = {0};
++   struct nv30_surface *sf = &surf;
+    struct nv30_miptree *mt = nv30_miptree(ps->texture);
+    struct nouveau_pushbuf *push = nv30->base.pushbuf;
+    struct nouveau_object *eng3d = nv30->screen->eng3d;
+    uint32_t rt_format;
+ 
++   nv30_miptree_surface_init(sf, ps->texture, ps);
++
+    rt_format = nv30_format(pipe->screen, ps->format)->hw;
+    if (util_format_get_blocksize(ps->format) == 4)
+       rt_format |= NV30_3D_RT_FORMAT_ZETA_Z24S8;
+@@ -186,12 +194,15 @@ nv30_clear_depth_stencil(struct pipe_context *pipe, struct pipe_surface *ps,
+                          bool render_condition_enabled)
+ {
+    struct nv30_context *nv30 = nv30_context(pipe);
+-   struct nv30_surface *sf = nv30_surface(ps);
++   struct nv30_surface surf = {0};
++   struct nv30_surface *sf = &surf;
+    struct nv30_miptree *mt = nv30_miptree(ps->texture);
+    struct nouveau_pushbuf *push = nv30->base.pushbuf;
+    struct nouveau_object *eng3d = nv30->screen->eng3d;
+    uint32_t rt_format, mode = 0;
+ 
++   nv30_miptree_surface_init(sf, ps->texture, ps);
++
+    rt_format = nv30_format(pipe->screen, ps->format)->hw;
+    if (util_format_get_blocksize(ps->format) == 4)
+       rt_format |= NV30_3D_RT_FORMAT_COLOR_A8R8G8B8;
+diff --git a/src/gallium/drivers/nouveau/nv30/nv30_miptree.c b/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
+index f8139418327f..be0b4dfbca01 100644
+--- a/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
++++ b/src/gallium/drivers/nouveau/nv30/nv30_miptree.c
+@@ -541,22 +541,18 @@ nv30_miptree_from_handle(struct pipe_screen *pscreen,
+    return &mt->base.base;
+ }
+ 
+-static struct pipe_surface *
+-nv30_miptree_surface_new(struct pipe_context *pipe,
+-                         struct pipe_resource *pt,
+-                         const struct pipe_surface *tmpl)
++/* Fill ns for the level and layers of tmpl. This neither allocates nor takes
++ * a reference on pt, so it can fill a surface on the stack.
++ */
++void
++nv30_miptree_surface_init(struct nv30_surface *ns, struct pipe_resource *pt,
++                          const struct pipe_surface *tmpl)
+ {
+    struct nv30_miptree *mt = nv30_miptree(pt); /* guaranteed */
+-   struct nv30_surface *ns;
+-   struct pipe_surface *ps;
+    struct nv30_miptree_level *lvl = &mt->level[tmpl->level];
++   struct pipe_surface *ps = &ns->base;
+ 
+-   ns = CALLOC_STRUCT(nv30_surface);
+-   if (!ns)
+-      return NULL;
+-   ps = &ns->base;
+-
+-   pipe_resource_reference(&ps->texture, pt);
++   ps->texture = pt;
+    ps->format = tmpl->format;
+    ps->level = tmpl->level;
+    ps->first_layer = tmpl->first_layer;
+@@ -570,8 +566,21 @@ nv30_miptree_surface_new(struct pipe_context *pipe,
+       ns->pitch = 4096; /* random, just something the hw won't reject.. */
+    else
+       ns->pitch = lvl->pitch;
++}
++
++static struct pipe_surface *
++nv30_miptree_surface_new(struct pipe_context *pipe,
++                         struct pipe_resource *pt,
++                         const struct pipe_surface *tmpl)
++{
++   struct nv30_surface *ns = CALLOC_STRUCT(nv30_surface);
++
++   if (!ns)
++      return NULL;
+ 
+-   return ps;
++   pipe_resource_reference(&ns->base.texture, pt);
++   nv30_miptree_surface_init(ns, pt, tmpl);
++   return &ns->base;
+ }
+ 
+ static void
+diff --git a/src/gallium/drivers/nouveau/nv30/nv30_resource.h b/src/gallium/drivers/nouveau/nv30/nv30_resource.h
+index 67e51d290407..a75d1b75f821 100644
+--- a/src/gallium/drivers/nouveau/nv30/nv30_resource.h
++++ b/src/gallium/drivers/nouveau/nv30/nv30_resource.h
+@@ -21,6 +21,10 @@ nv30_surface(struct pipe_surface *ps)
+    return (struct nv30_surface *)ps;
+ }
+ 
++void
++nv30_miptree_surface_init(struct nv30_surface *, struct pipe_resource *,
++                          const struct pipe_surface *);
++
+ struct nv30_miptree_level {
+    uint32_t offset;
+    uint32_t pitch;
+-- 
+GitLab
+
+
+From 1338c8649ce1cfcc19a09cee20ce6cf1b7c5b18a Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 11 Nov 2026 08:55:21 +0100
+Subject: [PATCH 04/13] nv50,nvc0: clear through a driver surface on the stack
+
+The clear_render_target and clear_depth_stencil hooks allocate a
+surface, with a texture reference, for every clear, only to read a few
+fields from it.
+
+Split nv50_surface_from_miptree and nv50_miptree_surface_new into
+_init helpers that fill a caller's nv50_surface without allocating or
+taking a reference, and clear through a surface on the stack.
+
+Suggested-by: Dave Airlie <airlied@redhat.com>
+Generated-by: LLM
+Reviewed-by: Dave Airlie <airlied@redhat.com>
+---
+ .../drivers/nouveau/nv50/nv50_miptree.c       | 64 +++++++++++++------
+ .../drivers/nouveau/nv50/nv50_resource.h      | 10 +++
+ .../drivers/nouveau/nv50/nv50_surface.c       | 23 +++----
+ .../drivers/nouveau/nvc0/nvc0_surface.c       | 23 +++----
+ 4 files changed, 72 insertions(+), 48 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+index ffd0ecefa592..beacd55a40cf 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+@@ -462,20 +462,19 @@ nv50_mt_zslice_offset(const struct nv50_miptree *mt, unsigned l, unsigned z)
+ /* Surface functions.
+  */
+ 
+-struct nv50_surface *
+-nv50_surface_from_miptree(struct nv50_miptree *mt,
+-                          const struct pipe_surface *templ)
++/* Fill ns for the level and layers of templ. This neither allocates nor takes
++ * a reference on mt, so it can fill a surface on the stack.
++ */
++void
++nv50_surface_init_from_miptree(struct nv50_surface *ns,
++                               struct nv50_miptree *mt,
++                               const struct pipe_surface *templ)
+ {
+-   struct pipe_surface *ps;
+-   struct nv50_surface *ns = CALLOC_STRUCT(nv50_surface);
+-   if (!ns)
+-      return NULL;
+-   ps = &ns->base;
+-
+-   pipe_reference_init(&ps->reference, 1);
+-   pipe_resource_reference(&ps->texture, &mt->base.base);
++   struct pipe_surface *ps = &ns->base;
+ 
++   ps->texture = &mt->base.base;
+    ps->format = templ->format;
++   ps->nr_samples = templ->nr_samples;
+    ps->level = templ->level;
+    ps->first_layer = templ->first_layer;
+    ps->last_layer = templ->last_layer;
+@@ -500,19 +499,34 @@ nv50_surface_from_miptree(struct nv50_miptree *mt,
+ 
+    ns->width <<= mt->ms_x;
+    ns->height <<= mt->ms_y;
++}
++
++struct nv50_surface *
++nv50_surface_from_miptree(struct nv50_miptree *mt,
++                          const struct pipe_surface *templ)
++{
++   struct nv50_surface *ns = CALLOC_STRUCT(nv50_surface);
++   if (!ns)
++      return NULL;
++
++   pipe_reference_init(&ns->base.reference, 1);
++   pipe_resource_reference(&ns->base.texture, &mt->base.base);
++   nv50_surface_init_from_miptree(ns, mt, templ);
+ 
+    return ns;
+ }
+ 
+-struct pipe_surface *
+-nv50_miptree_surface_new(struct pipe_context *pipe,
+-                         struct pipe_resource *pt,
+-                         const struct pipe_surface *templ)
++/* Like nv50_surface_init_from_miptree, with the offset of the first layer
++ * added as nv50 render targets need it.
++ */
++void
++nv50_miptree_surface_init(struct nv50_surface *ns,
++                          struct pipe_resource *pt,
++                          const struct pipe_surface *templ)
+ {
+    struct nv50_miptree *mt = nv50_miptree(pt);
+-   struct nv50_surface *ns = nv50_surface_from_miptree(mt, templ);
+-   if (!ns)
+-      return NULL;
++
++   nv50_surface_init_from_miptree(ns, mt, templ);
+ 
+    if (ns->base.first_layer) {
+       const unsigned l = ns->base.level;
+@@ -529,6 +543,20 @@ nv50_miptree_surface_new(struct pipe_context *pipe,
+          ns->offset += mt->layer_stride * z;
+       }
+    }
++}
++
++struct pipe_surface *
++nv50_miptree_surface_new(struct pipe_context *pipe,
++                         struct pipe_resource *pt,
++                         const struct pipe_surface *templ)
++{
++   struct nv50_surface *ns = CALLOC_STRUCT(nv50_surface);
++   if (!ns)
++      return NULL;
++
++   pipe_reference_init(&ns->base.reference, 1);
++   pipe_resource_reference(&ns->base.texture, pt);
++   nv50_miptree_surface_init(ns, pt, templ);
+ 
+    return &ns->base;
+ }
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_resource.h b/src/gallium/drivers/nouveau/nv50/nv50_resource.h
+index 11e3d42fb02e..f86e6e6ac82a 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_resource.h
++++ b/src/gallium/drivers/nouveau/nv50/nv50_resource.h
+@@ -136,6 +136,11 @@ nv50_miptree_surface_new(struct pipe_context *,
+                          struct pipe_resource *,
+                          const struct pipe_surface *templ);
+ 
++void
++nv50_miptree_surface_init(struct nv50_surface *,
++                          struct pipe_resource *,
++                          const struct pipe_surface *templ);
++
+ void *
+ nv50_miptree_transfer_map(struct pipe_context *pctx,
+                           struct pipe_resource *res,
+@@ -149,6 +154,11 @@ nv50_miptree_transfer_unmap(struct pipe_context *pcontext,
+ 
+ #endif /* __NVC0_RESOURCE_H__ */
+ 
++void
++nv50_surface_init_from_miptree(struct nv50_surface *ns,
++                               struct nv50_miptree *mt,
++                               const struct pipe_surface *templ);
++
+ struct nv50_surface *
+ nv50_surface_from_miptree(struct nv50_miptree *mt,
+                           const struct pipe_surface *templ);
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_surface.c b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+index e834011be98c..0dbb2e4070d4 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_surface.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+@@ -378,15 +378,11 @@ nv50_clear_render_target(struct pipe_context *pipe,
+                          unsigned width, unsigned height,
+                          bool render_condition_enabled)
+ {
+-   struct pipe_surface *ps = nv50_miptree_surface_new(pipe, dst->texture, dst);
++   struct nv50_surface sf = {0};
+ 
+-   if (!ps)
+-      return;
+-
+-   nv50_clear_render_target_internal(pipe, nv50_surface(ps), color,
+-                                     dstx, dsty, width, height,
+-                                     render_condition_enabled);
+-   nv50_surface_destroy(pipe, ps);
++   nv50_miptree_surface_init(&sf, dst->texture, dst);
++   nv50_clear_render_target_internal(pipe, &sf, color, dstx, dsty,
++                                     width, height, render_condition_enabled);
+ }
+ 
+ static void
+@@ -487,15 +483,12 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
+                          unsigned width, unsigned height,
+                          bool render_condition_enabled)
+ {
+-   struct pipe_surface *ps = nv50_miptree_surface_new(pipe, dst->texture, dst);
++   struct nv50_surface sf = {0};
+ 
+-   if (!ps)
+-      return;
+-
+-   nv50_clear_depth_stencil_internal(pipe, nv50_surface(ps), clear_flags,
+-                                     depth, stencil, dstx, dsty, width, height,
++   nv50_miptree_surface_init(&sf, dst->texture, dst);
++   nv50_clear_depth_stencil_internal(pipe, &sf, clear_flags, depth, stencil,
++                                     dstx, dsty, width, height,
+                                      render_condition_enabled);
+-   nv50_surface_destroy(pipe, ps);
+ }
+ 
+ void
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
+index a994bfc29937..43d629c00998 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
+@@ -382,15 +382,11 @@ nvc0_clear_render_target(struct pipe_context *pipe,
+                          unsigned width, unsigned height,
+                          bool render_condition_enabled)
+ {
+-   struct pipe_surface *ps = nvc0_miptree_surface_new(pipe, dst->texture, dst);
++   struct nv50_surface sf = {0};
+ 
+-   if (!ps)
+-      return;
+-
+-   nvc0_clear_render_target_internal(pipe, nv50_surface(ps), color,
+-                                     dstx, dsty, width, height,
+-                                     render_condition_enabled);
+-   nv50_surface_destroy(pipe, ps);
++   nv50_surface_init_from_miptree(&sf, nv50_miptree(dst->texture), dst);
++   nvc0_clear_render_target_internal(pipe, &sf, color, dstx, dsty,
++                                     width, height, render_condition_enabled);
+ }
+ 
+ static void
+@@ -725,15 +721,12 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
+                          unsigned width, unsigned height,
+                          bool render_condition_enabled)
+ {
+-   struct pipe_surface *ps = nvc0_miptree_surface_new(pipe, dst->texture, dst);
++   struct nv50_surface sf = {0};
+ 
+-   if (!ps)
+-      return;
+-
+-   nvc0_clear_depth_stencil_internal(pipe, nv50_surface(ps), clear_flags,
+-                                     depth, stencil, dstx, dsty, width, height,
++   nv50_surface_init_from_miptree(&sf, nv50_miptree(dst->texture), dst);
++   nvc0_clear_depth_stencil_internal(pipe, &sf, clear_flags, depth, stencil,
++                                     dstx, dsty, width, height,
+                                      render_condition_enabled);
+-   nv50_surface_destroy(pipe, ps);
+ }
+ 
+ void
+-- 
+GitLab
+
+
+From 59cfb4b9938ad2d2cef9d3552972c868b04b54f4 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:28 +0200
-Subject: [PATCH 03/10] frontends/va: export interlaced surfaces through a
+Subject: [PATCH 05/13] frontends/va: export interlaced surfaces through a
  progressive copy
 
 nouveau decodes into interlaced surfaces, which vaExportSurfaceHandle
@@ -360,8 +759,8 @@ first export and refreshed after each decode, video processing or
 vaPutImage. Write-only exports are still rejected. Drivers with
 progressive buffers are not affected.
 
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  src/gallium/frontends/va/image.c      |  4 ++
  src/gallium/frontends/va/picture.c    |  4 ++
@@ -560,11 +959,11 @@ index e56a2d735cca..ce1ae1a48110 100644
 GitLab
 
 
-From 328c2e7784bd2fc0180363d6f0007c2d963ad17e Mon Sep 17 00:00:00 2001
+From af71b8a576b6bcd0d2fd0bc8fdb186944d716487 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:23 +0200
-Subject: [PATCH 04/10] winsys/nouveau: pass the DRM fd when deleting
+Subject: [PATCH 06/13] winsys/nouveau: pass the DRM fd when deleting
  subchannel objects
 
 nouveau_object_subchan_del() passes the channel handle to
@@ -573,8 +972,8 @@ The next object at the same address fails with -EEXIST, which breaks
 decoder re-creation: Firefox drops hardware decoding when a video loops.
 
 Fixes: 821f4c8d99a3 ("nouveau: import libdrm_nouveau")
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  src/gallium/winsys/nouveau/drm/nouveau.c | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)
@@ -604,11 +1003,11 @@ index a942cff18633..14de23b0f07c 100644
 GitLab
 
 
-From 5fe7d502147d115f71d427baf5ce6b092ef9239a Mon Sep 17 00:00:00 2001
+From 358dbd3e89d55d558028adc77a5d16f56798bbf9 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:27 +0200
-Subject: [PATCH 05/10] nv50: only push constant buffer updates through a
+Subject: [PATCH 07/13] nv50: only push constant buffer updates through a
  current binding
 
 nv50_cb_push() writes through the binding point found in
@@ -620,8 +1019,8 @@ the wrong projection.
 Use the binding only when it is current for this context and points at
 this buffer; otherwise write through the buffer's address.
 
-Backport-to: *
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Generated-by: LLM
 ---
  src/gallium/drivers/nouveau/nv50/nv50_transfer.c | 15 +++++++++++++--
  1 file changed, 13 insertions(+), 2 deletions(-)
@@ -664,11 +1063,11 @@ index a1e308206079..002f76e478fc 100644
 GitLab
 
 
-From ea9d1b67624195f6db6a9a393629f7034344a5ed Mon Sep 17 00:00:00 2001
+From 3d0a1c92218e28dcc0338a5ce55fc027877a853d Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:24 +0200
-Subject: [PATCH 06/10] nouveau: keep H.264 references in the same VP slot
+Subject: [PATCH 08/13] nouveau: keep H.264 references in the same VP slot
 
 VP3 to VP5 identify reference pictures by their slot (fifo_idx), and the
 motion vectors stored with each picture refer to those slots. ffmpeg
@@ -679,9 +1078,9 @@ in moving areas.
 Keep each reference in the slot it already had and put new references
 in free slots.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  .../drivers/nouveau/nouveau_vp3_video.h       |  2 ++
  .../drivers/nouveau/nouveau_vp3_video_vp.c    | 32 ++++++++++++++++---
@@ -762,11 +1161,11 @@ index d35ac3152e3c..237f9e1c028c 100644
 GitLab
 
 
-From f5a46385abae43156ef29eb8a7031fe508cf6c71 Mon Sep 17 00:00:00 2001
+From df854abd8b03ddfbd5f9b22592cccda57d298496 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:25 +0200
-Subject: [PATCH 07/10] nouveau: wait for the video engines before destroying a
+Subject: [PATCH 09/13] nouveau: wait for the video engines before destroying a
  vp3 decoder
 
 Destroying a decoder while the engines are still busy leaves the channel
@@ -775,9 +1174,9 @@ This happens when a player stops a video mid-decode.
 
 Wait for the engine buffers before tearing the decoder down.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  .../drivers/nouveau/nouveau_vp3_video.c        | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
@@ -817,11 +1216,11 @@ index 5130ed6d6386..7753f22764fa 100644
 GitLab
 
 
-From e7731ca314840014a0f1fc7cfb4512202d4c57bf Mon Sep 17 00:00:00 2001
+From 29602a3041df6197c010dcd9f0bdfcabd62d1c5e Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Tue, 20 Oct 2026 09:21:18 +0200
-Subject: [PATCH 08/10] vl/compositor: render the V plane with its own gfx
+Subject: [PATCH 10/13] vl/compositor: render the V plane with its own gfx
  shaders
 
 The graphics path renders both chroma planes of a three-plane target,
@@ -833,9 +1232,9 @@ compute path already has separate U and V shaders.
 Add V variants of the YUV deinterlace and RGB-to-YUV fragment shaders,
 writing V to the first channel, and use them for the V plane.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  src/gallium/auxiliary/vl/vl_compositor.c     | 34 ++++++++++++--------
  src/gallium/auxiliary/vl/vl_compositor.h     |  3 ++
@@ -1042,11 +1441,11 @@ index c274816ced22..81dfff258506 100644
 GitLab
 
 
-From 82cd6f90587348d20efffcd059e71d93019c62bb Mon Sep 17 00:00:00 2001
+From 10bc824a1ae92e6f43b6a392bbd6f1cc562d3813 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Tue, 20 Oct 2026 09:21:18 +0200
-Subject: [PATCH 09/10] nouveau: pass chroma_format_idc to the vp3 H.264
+Subject: [PATCH 11/13] nouveau: pass chroma_format_idc to the vp3 H.264
  decoder
 
 The H.264 picture parameters for BSP and VP both have a
@@ -1059,9 +1458,9 @@ Pass the stream's value to both engines. With 4:0:0 the decoder leaves
 the chroma planes alone, and the VA frontend clears them to grey when
 it allocates the surface.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 4 ++--
  src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c  | 2 +-
@@ -1106,11 +1505,11 @@ index 237f9e1c028c..45458dbb15de 100644
 GitLab
 
 
-From 3eb3b967b6b3483dced4e29e16886f62012384cc Mon Sep 17 00:00:00 2001
+From d46b93cafd70e3a3a5f648d5b64bc8ae0770fe7f Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Tue, 20 Oct 2026 09:21:19 +0200
-Subject: [PATCH 10/10] nouveau: tell the vp3 H.264 decoder whether a picture
+Subject: [PATCH 12/13] nouveau: tell the vp3 H.264 decoder whether a picture
  is MBAFF
 
 BSP and VP take mb_adaptive_frame_field_flag from the SPS, but MBAFF
@@ -1121,9 +1520,9 @@ broadcasts do, decode into blocks and garbage.
 
 Pass MbaffFrameFlag instead: the SPS flag for frames, 0 for fields.
 
-Backport-to: *
-Tested-by: Kush Chandak <kushc451@gmail.com>
-Generated-by: Claude Code (Claude Opus 5.5)
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 3 ++-
  src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c  | 3 ++-
@@ -1160,10 +1559,12 @@ index 45458dbb15de..00d521c49341 100644
 -- 
 GitLab
 
-From 522d12ec45466eaffe3870dabe14e289938eb5bd Mon Sep 17 00:00:00 2001
-From: Francesco Stimola <francesco-stimola@users.noreply.github.com>
-Date: Mon, 2 Nov 2026 10:12:21 +0100
-Subject: [PATCH] nvc0: accept tiled modifiers for planar YUV formats
+
+From df72018aa53afec0f9837e7215a01233054674f8 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Mon, 2 Nov 2026 13:37:31 +0100
+Subject: [PATCH 13/13] nvc0: accept tiled modifiers for planar YUV formats
 
 nvc0 derives the storage type of a modifier from the block size of the
 format, which planar YUV formats don't have, so it accepts only LINEAR
@@ -1171,12 +1572,16 @@ for NV12. Importing a tiled NV12 buffer that nvc0 exported, as Chromium
 does with VA-API frames, then fails in dri2_from_dma_bufs.
 
 For planar formats, take the storage type of the first plane's format.
+
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
 ---
  .../drivers/nouveau/nvc0/nvc0_resource.c      | 19 +++++++++++++++----
  1 file changed, 15 insertions(+), 4 deletions(-)
 
 diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
-index 98339c0..ff2deca 100644
+index 98339c09928f..ff2deca8f94c 100644
 --- a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
 +++ b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
 @@ -1,6 +1,7 @@
@@ -1226,3 +1631,6 @@ index 98339c0..ff2deca 100644
     const uint32_t num_uc = uc_kind ? 6 : 0; /* max block height = 32 GOBs */
     const uint32_t kind_gen = nvc0_get_kind_generation(screen);
     int i;
+-- 
+GitLab
+
