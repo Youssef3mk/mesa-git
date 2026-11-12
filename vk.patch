@@ -1,4 +1,4 @@
-From 8e33e93807886be71c44b06f7c0da019e1c4ce57 Mon Sep 17 00:00:00 2001
+From 8dfb3cfe8f3b056a4b0b8dc930045e4de23704f2 Mon Sep 17 00:00:00 2001
 From: Anusha Srivatsa <asrivats@redhat.com>
 Date: Tue, 22 Sep 2026 14:57:53 -0500
 Subject: [PATCH 1/3] nvk: add indirect count draw support for pre-Turing
@@ -174,7 +174,7 @@ index d16c34a80e10..f7daabb54a7e 100644
 GitLab
 
 
-From d32a79ac47729fac3941daea9029ff5694bc83b8 Mon Sep 17 00:00:00 2001
+From 1202e44c662e9426743a165c7e726f8ce8cfbce1 Mon Sep 17 00:00:00 2001
 From: Anusha Srivatsa <asrivats@redhat.com>
 Date: Fri, 25 Sep 2026 15:03:38 -0500
 Subject: [PATCH 2/3] nvk: add indexed indirect count draw support for
@@ -200,7 +200,7 @@ Assisted-by: LLM
  2 files changed, 95 insertions(+), 33 deletions(-)
 
 diff --git a/src/nouveau/vulkan/nvk_cmd_draw.c b/src/nouveau/vulkan/nvk_cmd_draw.c
-index f7daabb54a7e..275f55991dec 100644
+index f7daabb54a7e..9ad39a4dce08 100644
 --- a/src/nouveau/vulkan/nvk_cmd_draw.c
 +++ b/src/nouveau/vulkan/nvk_cmd_draw.c
 @@ -5509,31 +5509,80 @@ nvk_CmdDrawIndirectCount2KHR(VkCommandBuffer commandBuffer,
@@ -276,8 +276,8 @@ index f7daabb54a7e..275f55991dec 100644
 +            mme_free_reg(b, mme_load(b));
 +          }
 +
-+      mme_free_reg(b, pad_dw);
-+      nvk_mme_unspill(b, DRAW_COUNT, max_draw_count);
++          mme_free_reg(b, pad_dw);
++          nvk_mme_unspill(b, DRAW_COUNT, max_draw_count);
 +      }
 +
 +      struct mme_value total_draws = nvk_mme_load_scratch(b, DRAW_TOTAL);
@@ -368,7 +368,7 @@ index ee423da8636b..b372f41a965a 100644
 GitLab
 
 
-From 6efae4c2b8513e0da6bfa072f9c61892921b09dd Mon Sep 17 00:00:00 2001
+From efde620e4944a2a76b82ecfab15d5d3265c97c4e Mon Sep 17 00:00:00 2001
 From: Anusha Srivatsa <asrivats@redhat.com>
 Date: Wed, 23 Sep 2026 17:18:07 -0500
 Subject: [PATCH 3/3] nvk: advertise VK_KHR_draw_indirect_count for pre-Turing
