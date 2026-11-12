@@ -43,8 +43,8 @@
 %global with_mesa_tools 0
 %global with_xlib_lease 1
 
-%global commit 1d4b5ef4a5562b6e2dba2cb5aacd60787979ba86
-%global shortcommit 1d4b5ef
+%global commit 1d2a95d203edef0f305d94fcd8a14eac8597dc41
+%global shortcommit 1d2a95d
 
 Name:           mesa
 Summary:        Mesa graphics libraries (Custom build: i915, nvk, rusticl, nouveau, va)
