@@ -1,0 +1,35 @@
+From 55a9a86a870c80a56a586148c7eb37987d0b3af4 Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Mon, 9 Nov 2026 23:31:11 -0500
+Subject: [PATCH] nak: Fix mask for SuStGa
+
+This was incorrect for intrinsics that write fewer than 4 components.
+Copy the mask code from nir_intrinsic_bindless_image_store instead.
+
+Closes: https://gitlab.freedesktop.org/mesa/mesa/-/work_items/16834
+Fixes: ac3fd5768bd ("nak: Add surface address ops")
+---
+ src/nouveau/compiler/nak/from_nir.rs | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/nouveau/compiler/nak/from_nir.rs b/src/nouveau/compiler/nak/from_nir.rs
+index ebb7caf630ac..3bf606404536 100644
+--- a/src/nouveau/compiler/nak/from_nir.rs
++++ b/src/nouveau/compiler/nak/from_nir.rs
+@@ -2949,8 +2949,12 @@ impl<'a> ShaderFromNir<'a> {
+                 let out_of_bounds = self.get_src(&srcs[2]);
+ 
+                 let data = self.get_src(&srcs[3]);
++
++                let comps = intrin.num_components;
++                assert!(srcs[3].bit_size() == 32);
++                assert!(comps == 1 || comps == 2 || comps == 4);
+                 let image_access =
+-                    ImageAccess::Formatted(ChannelMask::new(0xf));
++                    ImageAccess::Formatted(ChannelMask::for_comps(comps));
+ 
+                 let flags = intrin.flags();
+                 let offset_mode = match flags {
+-- 
+GitLab
+
