@@ -43,12 +43,12 @@
 %global with_mesa_tools 0
 %global with_xlib_lease 1
 
-%global commit 8510af74d8c599c9f33b28ed958283745da853f2
-%global shortcommit 8510af7
+%global commit be106c21433382a47f5032c3e9ee932ae634fc1a
+%global shortcommit be106c2
 
 Name:           mesa
 Summary:        Mesa graphics libraries (Custom build: i915, nvk, rusticl, nouveau, va)
-Version:        28.10
+Version:        29.10
 Release:        0.26112.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
