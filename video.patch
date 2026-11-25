@@ -2,7 +2,7 @@ From 1e7b9c0112eeaa317ab97b39645383b2a57aaf43 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:24 +0200
-Subject: [PATCH 1/5] nouveau: keep H.264 references in the same VP slot
+Subject: [PATCH 1/6] nouveau: keep H.264 references in the same VP slot
 
 VP3 to VP5 identify reference pictures by their slot (fifo_idx), and the
 motion vectors stored with each picture refer to those slots. ffmpeg
@@ -100,7 +100,7 @@ From 36f26a428f0d5023cb8fe0fe66a3b1a9bd4d6ccd Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:25 +0200
-Subject: [PATCH 2/5] nouveau: wait for the video engines before destroying a
+Subject: [PATCH 2/6] nouveau: wait for the video engines before destroying a
  vp3 decoder
 
 Destroying a decoder while the engines are still busy leaves the channel
@@ -155,7 +155,7 @@ From 261d03a78d3d8f4064d77bb6a95a47ab26b1f97c Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Mon, 2 Nov 2026 13:37:31 +0100
-Subject: [PATCH 3/5] nvc0: accept tiled modifiers for planar YUV formats
+Subject: [PATCH 3/6] nvc0: accept tiled modifiers for planar YUV formats
 
 nvc0 derives the storage type of a modifier from the block size of the
 format, which planar YUV formats don't have, so it accepts only LINEAR
@@ -230,7 +230,7 @@ From b48a704e4e4734154e1734353cf69124840c54d1 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 15:59:57 +0100
-Subject: [PATCH 4/5] nouveau: add a start code to vc1 simple and main pictures
+Subject: [PATCH 4/6] nouveau: add a start code to vc1 simple and main pictures
 
 VP3 to VP5's BSP expects a start code in front of each VC-1 picture. The
 VA frontend only adds one for Advanced profile, so Simple and Main
@@ -274,7 +274,7 @@ From 808914e6faf619e13d3d5bf3186db0cd641fb221 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 15:59:58 +0100
-Subject: [PATCH 5/5] nouveau: refuse interlaced vc1 pictures on vp3 to vp5
+Subject: [PATCH 5/6] nouveau: refuse interlaced vc1 pictures on vp3 to vp5
 
 VP gets no field information for VC-1. It decodes the second field of a
 field-interlaced frame wrongly, and the frames after it too, without any
@@ -398,6 +398,40 @@ index 9df9c33243c6..6b4594bfb7e2 100644
     desc.base = picture;
  
     ret = nvc0_decoder_bsp_end(dec, desc, target, comm_seq, &vp_caps, &is_ref, refs);
+-- 
+GitLab
+
+
+From 07b1615ba8dfc817b3ea6b8c3b0dee054131a148 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 21:38:20 +0100
+Subject: [PATCH 6/6] nouveau: report the size of exported buffers
+
+nouveau_screen_bo_get_handle never set whandle->size, so
+vaExportSurfaceHandle gave every object a size of 0. GStreamer's VA
+plugin warns about a driver bug for each plane of each surface and reads
+the size from the fd instead.
+
+Set it to the size of the buffer object.
+
+Generated-by: LLM
+---
+ src/gallium/drivers/nouveau/nouveau_screen.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_screen.c b/src/gallium/drivers/nouveau/nouveau_screen.c
+index b144b8977e7e..f483f255c24d 100644
+--- a/src/gallium/drivers/nouveau/nouveau_screen.c
++++ b/src/gallium/drivers/nouveau/nouveau_screen.c
+@@ -145,6 +145,7 @@ nouveau_screen_bo_get_handle(struct pipe_screen *pscreen,
+                              struct winsys_handle *whandle)
+ {
+    whandle->stride = stride;
++   whandle->size = bo->size;
+ 
+    if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
+       return nouveau_bo_name_get(bo, &whandle->handle) == 0;
 -- 
 GitLab
 
