@@ -1,0 +1,123 @@
+From 3c4301bb1f64e195c35c3b8d64f157233f4f36e5 Mon Sep 17 00:00:00 2001
+From: Mary Guillemard <mary@mary.zone>
+Date: Wed, 25 Nov 2026 15:06:40 +0100
+Subject: [PATCH 1/3] nouveau/winsys: Early error out if no video decode class
+ is found
+
+We currently ignore the class output and try to allocate a class 0
+causing asserts on pre-Turing if built in debug mode.
+
+This patch fixes this by checking if the object class is valid first.
+
+Signed-off-by: Mary Guillemard <mary@mary.zone>
+Fixes: d967121a169 ("nouveau/winsys: Add video context support")
+---
+ src/nouveau/winsys/nouveau_context.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/nouveau/winsys/nouveau_context.c b/src/nouveau/winsys/nouveau_context.c
+index 00551d9f05c1..69486e29a455 100644
+--- a/src/nouveau/winsys/nouveau_context.c
++++ b/src/nouveau/winsys/nouveau_context.c
+@@ -242,6 +242,12 @@ nouveau_ws_video_context_init(struct nouveau_ws_device *dev,
+ 
+    if (engines & NOUVEAU_WS_ENGINE_VDEC) {
+       uint32_t obj_class = nouveau_ws_context_find_class(classes, 0xb0);
++
++      if (!obj_class) {
++         ret = -EINVAL;
++         goto fail_subchan;
++      }
++
+       ret = nouveau_ws_subchan_alloc(dev->fd, req.channel, base | 0x00b0,
+                                      obj_class, &ctx->vdec);
+       if (ret)
+-- 
+GitLab
+
+
+From 0132b5d525186a1383c73d5151beb37455ea3b91 Mon Sep 17 00:00:00 2001
+From: Mary Guillemard <mary@mary.zone>
+Date: Wed, 25 Nov 2026 18:30:46 +0100
+Subject: [PATCH 2/3] nouveau/mme: Fix missing clear in Fermi multiplication
+ emulation
+
+We were not clearing dst before doing the actual operation.
+
+Fix all compute invocations failures on VKCTS since query pool rework.
+
+Signed-off-by: Mary Guillemard <mary@mary.zone>
+Backport-to: *
+---
+ src/nouveau/mme/mme_fermi_builder.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/nouveau/mme/mme_fermi_builder.c b/src/nouveau/mme/mme_fermi_builder.c
+index 2888e2afeb50..984b16a57bdf 100644
+--- a/src/nouveau/mme/mme_fermi_builder.c
++++ b/src/nouveau/mme/mme_fermi_builder.c
+@@ -349,6 +349,7 @@ mme_fermi_umul_32x32_32_to_free_srcs(struct mme_builder *b,
+                                      struct mme_value x,
+                                      struct mme_value y)
+ {
++   mme_mov_to(b, dst, mme_zero());
+    mme_while (b, ine, x, mme_zero()) {
+       struct mme_value lsb = mme_and(b, x, mme_imm(1));
+       mme_if (b, ine, lsb, mme_zero()) {
+@@ -368,6 +369,7 @@ mme_fermi_umul_32x64_64_to_free_srcs(struct mme_builder *b,
+                                      struct mme_value x,
+                                      struct mme_value64 y)
+ {
++   mme_mov64_to(b, dst, mme_imm64(0));
+    mme_while (b, ine, x, mme_zero()) {
+       struct mme_value lsb = mme_and(b, x, mme_imm(1));
+       mme_if (b, ine, lsb, mme_zero()) {
+-- 
+GitLab
+
+
+From a9ae5ce86b0bdad495b0f38f273db2eb33f8c061 Mon Sep 17 00:00:00 2001
+From: Mary Guillemard <mary@mary.zone>
+Date: Wed, 25 Nov 2026 18:46:16 +0100
+Subject: [PATCH 3/3] nak/hw_tests: Fix test_op_fmnmx for pre-Ampere
+
+Skip unsupported configurations on older gens.
+
+Signed-off-by: Mary Guillemard <mary@mary.zone>
+Co-authored-by: Karol Herbst <git@karolherbst.de>
+---
+ src/nouveau/compiler/nak/hw_tests.rs | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/src/nouveau/compiler/nak/hw_tests.rs b/src/nouveau/compiler/nak/hw_tests.rs
+index d9e935e6cac6..04583818bcd6 100644
+--- a/src/nouveau/compiler/nak/hw_tests.rs
++++ b/src/nouveau/compiler/nak/hw_tests.rs
+@@ -3063,14 +3063,21 @@ fn get_foldable_f32(a: &mut Acorn) -> u32 {
+ 
+ #[test]
+ pub fn test_op_fmnmx() {
+-    for bits in 0..=0x7 {
++    let run = &RunSingleton::get();
++    let max = match run.sm.sm() {
++        x if x >= 86 => 0x7,
++        x if x >= 80 => 0x3,
++        _ => 0x1,
++    };
++
++    for bits in 0..=max {
+         let op = OpFMnMx {
+             dst: Dst::None,
+             srcs: [0.into(), 0.into()],
+-            min: (bits & 0x4 == 0x4).into(),
++            min: (bits & 0x1 == 0x1).into(),
+             ftz: false,
+             nan: bits & 0x2 == 0x2,
+-            xorsign: bits & 0x1 == 0x1,
++            xorsign: bits & 0x4 == 0x4,
+         };
+ 
+         let mut a = Acorn::new();
+-- 
+GitLab
+

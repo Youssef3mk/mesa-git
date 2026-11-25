@@ -1,0 +1,977 @@
+From 8fe50e3267efd69815f5e2e936fca58fdded7b8c Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 14:43:13 +0100
+Subject: [PATCH 1/4] nouveau: give vp3 decoders progressive video buffers
+
+VP3 to VP5 only had interlaced video buffers, which the VA frontend can
+neither export nor derive images from, so players fall back to software
+decoding.
+
+PPP can write a whole frame too: bit 4 of its mode method selects field
+output. Clear it for progressive targets, which are single-layer,
+full-height buffers.
+
+Generated-by: LLM
+---
+ .../drivers/nouveau/nouveau_vp3_video.c       | 19 +++++++++++++------
+ .../drivers/nouveau/nv50/nv98_video_ppp.c     | 10 +++++++++-
+ .../drivers/nouveau/nvc0/nvc0_video_ppp.c     | 10 +++++++++-
+ 3 files changed, 31 insertions(+), 8 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 5130ed6d6386..6b242ed41ce0 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -98,11 +98,11 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
+    unsigned i, j, component;
+    struct pipe_sampler_view sv_templ;
+    struct pipe_surface surf_templ;
++   const bool interlaced = templat->interlaced;
+ 
+    if (templat->buffer_format != PIPE_FORMAT_NV12)
+       return vl_video_buffer_create(pipe, templat);
+ 
+-   assert(templat->interlaced);
+    assert(pipe_format_to_chroma_format(templat->buffer_format) == PIPE_VIDEO_CHROMA_FORMAT_420);
+ 
+    buffer = CALLOC_STRUCT(nouveau_vp3_video_buffer);
+@@ -118,17 +118,20 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
+    buffer->base.get_sampler_view_planes = nouveau_vp3_video_buffer_sampler_view_planes;
+    buffer->base.get_sampler_view_components = nouveau_vp3_video_buffer_sampler_view_components;
+    buffer->base.get_surfaces = nouveau_vp3_video_buffer_surfaces;
+-   buffer->base.interlaced = true;
++   buffer->base.interlaced = interlaced;
+ 
++   /* Interlaced buffers hold one field per layer, progressive ones the
++    * whole frame; PPP writes either, see nv98/nvc0_decoder_setup_ppp().
++    */
+    memset(&templ, 0, sizeof(templ));
+-   templ.target = PIPE_TEXTURE_2D_ARRAY;
++   templ.target = interlaced ? PIPE_TEXTURE_2D_ARRAY : PIPE_TEXTURE_2D;
+    templ.depth0 = 1;
+    templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
+    templ.format = PIPE_FORMAT_R8_UNORM;
+    templ.width0 = buffer->base.width;
+-   templ.height0 = (buffer->base.height + 1)/2;
++   templ.height0 = interlaced ? (buffer->base.height + 1) / 2 : buffer->base.height;
+    templ.flags = flags;
+-   templ.array_size = 2;
++   templ.array_size = interlaced ? 2 : 1;
+ 
+    buffer->resources[0] = pipe->screen->resource_create(pipe->screen, &templ);
+    if (!buffer->resources[0])
+@@ -168,6 +171,10 @@ nouveau_vp3_video_buffer_create(struct pipe_context *pipe,
+    for (j = 0; j < buffer->num_planes; ++j) {
+       u_surface_default_template(&surf_templ, buffer->resources[j]);
+       surf_templ.first_layer = surf_templ.last_layer = 0;
++      if (!interlaced) {
++         buffer->surfaces[j] = surf_templ;
++         continue;
++      }
+       buffer->surfaces[j * 2] = surf_templ;
+ 
+       surf_templ.first_layer = surf_templ.last_layer = 1;
+@@ -488,7 +495,7 @@ nouveau_vp3_screen_get_video_param(struct pipe_screen *pscreen,
+          return 0;
+       }
+    case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return false;
++      return true;
+    case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+       switch (codec) {
+       case PIPE_VIDEO_FORMAT_MPEG12:
+diff --git a/src/gallium/drivers/nouveau/nv50/nv98_video_ppp.c b/src/gallium/drivers/nouveau/nv50/nv98_video_ppp.c
+index 24499630da45..7a0b2caa321e 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv98_video_ppp.c
++++ b/src/gallium/drivers/nouveau/nv50/nv98_video_ppp.c
+@@ -50,6 +50,13 @@ nv98_decoder_setup_ppp(struct nouveau_vp3_decoder *dec, struct nouveau_vp3_video
+    PUSH_REFN(push, bo_refs, num_refs);
+    nouveau_vp3_ycbcr_offsets(dec, &y2, &cbcr, &cbcr2);
+ 
++   /* With bit 4 set, PPP writes the two fields to the two layers of an
++    * interlaced target. Without it, PPP writes the whole frame and only
++    * uses the first output address of each plane.
++    */
++   if (!target->base.interlaced)
++      low700 &= ~0x10;
++
+    BEGIN_NV04(push, SUBC_PPP(0x700), 10);
+    in_addr = nouveau_vp3_video_addr(dec, target) >> 8;
+ 
+@@ -65,9 +72,10 @@ nv98_decoder_setup_ppp(struct nouveau_vp3_decoder *dec, struct nouveau_vp3_video
+ 
+    for (i = 0; i < 2; ++i) {
+       struct nv50_miptree *mt = (struct nv50_miptree *)target->resources[i];
++      uint32_t field2 = target->base.interlaced ? mt->total_size / 2 : 0;
+ 
+       PUSH_DATA (push, mt->base.address >> 8);
+-      PUSH_DATA (push, (mt->base.address + mt->total_size/2) >> 8);
++      PUSH_DATA (push, (mt->base.address + field2) >> 8);
+       mt->base.status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING;
+    }
+ }
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_video_ppp.c b/src/gallium/drivers/nouveau/nvc0/nvc0_video_ppp.c
+index 8a5295dfb19b..8c92b282a9b5 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_video_ppp.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_video_ppp.c
+@@ -50,6 +50,13 @@ nvc0_decoder_setup_ppp(struct nouveau_vp3_decoder *dec, struct nouveau_vp3_video
+    PUSH_REFN(push, bo_refs, num_refs);
+    nouveau_vp3_ycbcr_offsets(dec, &y2, &cbcr, &cbcr2);
+ 
++   /* With bit 4 set, PPP writes the two fields to the two layers of an
++    * interlaced target. Without it, PPP writes the whole frame and only
++    * uses the first output address of each plane.
++    */
++   if (!target->base.interlaced)
++      low700 &= ~0x10;
++
+    BEGIN_NVC0(push, SUBC_PPP(0x700), 10);
+    in_addr = nouveau_vp3_video_addr(dec, target) >> 8;
+ 
+@@ -65,9 +72,10 @@ nvc0_decoder_setup_ppp(struct nouveau_vp3_decoder *dec, struct nouveau_vp3_video
+ 
+    for (i = 0; i < 2; ++i) {
+       struct nv50_miptree *mt = (struct nv50_miptree *)target->resources[i];
++      uint32_t field2 = target->base.interlaced ? mt->total_size / 2 : 0;
+ 
+       PUSH_DATA (push, mt->base.address >> 8);
+-      PUSH_DATA (push, (mt->base.address + mt->total_size/2) >> 8);
++      PUSH_DATA (push, (mt->base.address + field2) >> 8);
+       mt->base.status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING;
+    }
+ }
+-- 
+GitLab
+
+
+From ea324a05681ef08b976870a2ff4b5c8d67088772 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 14:45:43 +0100
+Subject: [PATCH 2/4] nouveau: give vp2 decoders progressive video buffers
+
+VP2 only had interlaced video buffers, which the VA frontend can neither
+export nor derive images from.
+
+A progressive buffer now keeps an interlaced one, which VP decodes into
+and reads as a reference. After each picture the decoder weaves its
+fields into the progressive buffer, with a NIR fragment shader in the
+nv50 3D blitter. Not tested on VP2 hardware.
+
+Generated-by: LLM
+---
+ .../drivers/nouveau/nv50/nv50_context.h       |   2 +
+ .../drivers/nouveau/nv50/nv50_surface.c       | 127 ++++++++++++++++++
+ src/gallium/drivers/nouveau/nv50/nv84_video.c | 115 +++++++++++-----
+ src/gallium/drivers/nouveau/nv50/nv84_video.h |  14 ++
+ .../drivers/nouveau/nv50/nv84_video_bsp.c     |   2 +-
+ .../drivers/nouveau/nv50/nv84_video_vp.c      |   6 +-
+ 6 files changed, 227 insertions(+), 39 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_context.h b/src/gallium/drivers/nouveau/nv50/nv50_context.h
+index 7649ec90fc7c..e7bb040627d5 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_context.h
++++ b/src/gallium/drivers/nouveau/nv50/nv50_context.h
+@@ -325,6 +325,8 @@ extern void nv50_clear_render_target_internal(struct pipe_context *,
+                                               unsigned width, unsigned height,
+                                               bool render_condition_enabled);
+ extern void nv50_init_surface_functions(struct nv50_context *);
++extern void nv50_blit_weave(struct pipe_context *, struct pipe_resource *dst,
++                            struct pipe_resource *src);
+ 
+ /* nv50_tex.c */
+ bool nv50_validate_tic(struct nv50_context *nv50, int s);
+diff --git a/src/gallium/drivers/nouveau/nv50/nv50_surface.c b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+index 0dbb2e4070d4..c705339315e6 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv50_surface.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_surface.c
+@@ -809,6 +809,7 @@ nv50_clear_buffer(struct pipe_context *pipe,
+ struct nv50_blitter
+ {
+    struct nv50_program *fp[NV50_BLIT_MAX_TEXTURE_TYPES][NV50_BLIT_MODES];
++   struct nv50_program *weave_fp;
+    struct nv50_program vp;
+ 
+    struct nv50_tsc_entry sampler[2]; /* nearest, bilinear */
+@@ -1537,6 +1538,127 @@ nv50_blit_3d(struct nv50_context *nv50, const struct pipe_blit_info *info)
+    nv50_blitctx_post_blit(blit);
+ }
+ 
++/* Line y of the frame is line y / 2 of field y % 2, the fields being the
++ * two layers of the source.
++ */
++static void *
++nv50_blitter_make_weave_fp(struct pipe_context *pipe)
++{
++   const int chipset = nouveau_screen(pipe->screen)->device->chipset;
++   const nir_shader_compiler_options *options =
++      nv50_ir_nir_shader_compiler_options(chipset, MESA_SHADER_FRAGMENT);
++   struct nir_builder b =
++      nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, options,
++                                     "weave_fp");
++
++   /* window coordinates, see nv50_blit_weave() */
++   nir_variable *coord_var =
++      nir_variable_create(b.shader, nir_var_shader_in,
++                          glsl_vector_type(GLSL_TYPE_FLOAT, 3), "coord");
++   coord_var->data.location = VARYING_SLOT_VAR0;
++   coord_var->data.interpolation = INTERP_MODE_NOPERSPECTIVE;
++
++   nir_variable *fields =
++      nir_variable_create(b.shader, nir_var_uniform,
++                          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, true,
++                                            GLSL_TYPE_FLOAT),
++                          "fields");
++   fields->data.binding = 0;
++
++   nir_def *pos = nir_f2u32(&b, nir_trim_vector(&b, nir_load_var(&b, coord_var), 2));
++   nir_def *x = nir_channel(&b, pos, 0);
++   nir_def *y = nir_channel(&b, pos, 1);
++   nir_def *texel = nir_vec3(&b, x, nir_ushr_imm(&b, y, 1), nir_iand_imm(&b, y, 1));
++   nir_def *color = nir_txf(&b, texel,
++                            .texture_deref = nir_build_deref_var(&b, fields));
++
++   nir_variable *out_var =
++      nir_variable_create(b.shader, nir_var_shader_out,
++                          glsl_vec4_type(), "out");
++   out_var->data.location = FRAG_RESULT_DATA0;
++   nir_store_var(&b, out_var, color, TGSI_WRITEMASK_XYZW);
++
++   NIR_PASS(_, b.shader, nir_lower_samplers);
++
++   return pipe_shader_from_nir(pipe, b.shader);
++}
++
++/* Weaves the fields of an interlaced video plane, src, into the progressive
++ * plane dst. VP2 can only decode into interlaced buffers.
++ */
++void
++nv50_blit_weave(struct pipe_context *pipe, struct pipe_resource *dst,
++                struct pipe_resource *src)
++{
++   struct nv50_context *nv50 = nv50_context(pipe);
++   struct nv50_blitctx *blit = nv50->blit;
++   struct nv50_blitter *blitter = nv50->screen->blitter;
++   struct nouveau_pushbuf *push = nv50->base.pushbuf;
++   const struct pipe_blit_info info = {
++      .dst.resource = dst,
++      .dst.format = dst->format,
++      .src.resource = src,
++      .src.format = src->format,
++      .mask = PIPE_MASK_RGBA,
++   };
++   const unsigned w = MIN2(dst->width0, src->width0);
++   const unsigned h = MIN2(dst->height0, src->height0 * 2);
++   unsigned i;
++
++   if (!blitter->weave_fp) {
++      mtx_lock(&blitter->mutex);
++      if (!blitter->weave_fp)
++         blitter->weave_fp = nv50_blitter_make_weave_fp(pipe);
++      mtx_unlock(&blitter->mutex);
++   }
++
++   blit->mode = NV50_BLIT_MODE_PASS;
++   blit->color_mask = nv50_blit_derive_color_mask(&info);
++   blit->filter = 0;
++   blit->render_condition_enable = false;
++   blit->fp = blitter->weave_fp;
++
++   nv50_blitctx_pre_blit(blit, &info);
++   nv50_blit_set_dst(blit, dst, 0, 0, dst->format);
++   nv50_blit_set_src(blit, src, 0, -1, src->format, blit->filter);
++   nv50_blitctx_prepare_state(blit);
++   nv50_state_validate_3d(nv50, ~0);
++
++   BEGIN_NV04(push, NV50_3D(VIEWPORT_TRANSFORM_EN), 1);
++   PUSH_DATA (push, 0);
++   BEGIN_NV04(push, NV50_3D(VIEW_VOLUME_CLIP_CTRL), 1);
++   PUSH_DATA (push, 0x1);
++   BEGIN_NV04(push, NV50_3D(SCISSOR_HORIZ(0)), 2);
++   PUSH_DATA (push, w << 16);
++   PUSH_DATA (push, h << 16);
++
++   /* A triangle covering the target, with the window coordinates as the
++    * varying, as in nv50_blit_3d().
++    */
++   PUSH_SPACE(push, 32);
++   BEGIN_NV04(push, NV50_3D(VERTEX_BEGIN_GL), 1);
++   PUSH_DATA (push, NV50_3D_VERTEX_BEGIN_GL_PRIMITIVE_TRIANGLES);
++   for (i = 0; i < 3; ++i) {
++      const float x = i == 1 ? 16384.0f : 0.0f;
++      const float y = i == 2 ? 16384.0f : 0.0f;
++
++      BEGIN_NV04(push, NV50_3D(VTX_ATTR_3F_X(1)), 3);
++      PUSH_DATAf(push, x);
++      PUSH_DATAf(push, y);
++      PUSH_DATAf(push, 0.0f);
++      BEGIN_NV04(push, NV50_3D(VTX_ATTR_2F_X(0)), 2);
++      PUSH_DATAf(push, x);
++      PUSH_DATAf(push, y);
++   }
++   BEGIN_NV04(push, NV50_3D(VERTEX_END_GL), 1);
++   PUSH_DATA (push, 0);
++
++   BEGIN_NV04(push, NV50_3D(VIEWPORT_TRANSFORM_EN), 1);
++   PUSH_DATA (push, 1);
++
++   nv50_blitctx_post_blit(blit);
++}
++
+ static void
+ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
+ {
+@@ -1851,6 +1973,11 @@ nv50_blitter_destroy(struct nv50_screen *screen)
+          }
+       }
+    }
++   if (blitter->weave_fp) {
++      nv50_program_destroy(NULL, blitter->weave_fp);
++      ralloc_free((void *)blitter->weave_fp->nir);
++      FREE(blitter->weave_fp);
++   }
+ 
+    mtx_destroy(&blitter->mutex);
+    FREE(blitter);
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.c b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+index 3b9cf51fc284..80643a7d99bf 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+@@ -122,6 +122,24 @@ nv84_load_vp_firmware_mpeg(struct nouveau_device *dev, struct nv84_decoder *dec)
+          dev, dec, "/lib/firmware/nouveau/nv84_vp-mpeg12", NULL);
+ }
+ 
++/* VP has decoded into the interlaced buffer behind a progressive target:
++ * weave it into the target.
++ */
++static void
++nv84_decoder_weave(struct nv84_decoder *dec, struct nv84_video_buffer *target)
++{
++   struct pipe_context *pipe = dec->base.context;
++   unsigned i;
++
++   if (!target->fields)
++      return;
++
++   for (i = 0; i < 2; ++i)
++      nv50_blit_weave(pipe, target->resources[i], target->fields->resources[i]);
++   /* Submit now: VP waits for this before it writes the fields again. */
++   pipe->flush(pipe, NULL, 0);
++}
++
+ static void
+ nv84_decoder_decode_bitstream_h264(struct pipe_video_codec *decoder,
+                                    struct pipe_video_buffer *video_target,
+@@ -132,13 +150,15 @@ nv84_decoder_decode_bitstream_h264(struct pipe_video_codec *decoder,
+ {
+    struct nv84_decoder *dec = (struct nv84_decoder *)decoder;
+    struct nv84_video_buffer *target = (struct nv84_video_buffer *)video_target;
++   struct nv84_video_buffer *dest = nv84_video_fields(video_target);
+ 
+    struct pipe_h264_picture_desc *desc = (struct pipe_h264_picture_desc *)picture;
+ 
+    assert(target->base.buffer_format == PIPE_FORMAT_NV12);
+ 
+-   nv84_decoder_bsp(dec, desc, num_buffers, data, num_bytes, target);
+-   nv84_decoder_vp_h264(dec, desc, target);
++   nv84_decoder_bsp(dec, desc, num_buffers, data, num_bytes, dest);
++   nv84_decoder_vp_h264(dec, desc, dest);
++   nv84_decoder_weave(dec, target);
+ }
+ 
+ static void
+@@ -210,10 +230,11 @@ nv84_decoder_end_frame_mpeg12(struct pipe_video_codec *decoder,
+                               struct pipe_video_buffer *target,
+                               struct pipe_picture_desc *picture)
+ {
+-   nv84_decoder_vp_mpeg12(
+-         (struct nv84_decoder *)decoder,
+-         (struct pipe_mpeg12_picture_desc *)picture,
+-         (struct nv84_video_buffer *)target);
++   struct nv84_decoder *dec = (struct nv84_decoder *)decoder;
++
++   nv84_decoder_vp_mpeg12(dec, (struct pipe_mpeg12_picture_desc *)picture,
++                          nv84_video_fields(target));
++   nv84_decoder_weave(dec, (struct nv84_video_buffer *)target);
+    return 0;
+ }
+ 
+@@ -610,6 +631,9 @@ nv84_video_buffer_destroy(struct pipe_video_buffer *buffer)
+    nouveau_bo_ref(NULL, &buf->interlaced);
+    nouveau_bo_ref(NULL, &buf->full);
+ 
++   if (buf->fields)
++      buf->fields->base.destroy(&buf->fields->base);
++
+    FREE(buffer);
+ }
+ 
+@@ -626,14 +650,11 @@ nv84_video_buffer_create(struct pipe_context *pipe,
+    struct nouveau_screen *screen = &((struct nv50_context *)pipe)->screen->base;
+    union nouveau_bo_config cfg;
+    unsigned bo_size;
++   const bool interlaced = template->interlaced;
+ 
+    if (template->buffer_format != PIPE_FORMAT_NV12)
+       return vl_video_buffer_create(pipe, template);
+ 
+-   if (!template->interlaced) {
+-      debug_printf("Require interlaced video buffers\n");
+-      return NULL;
+-   }
+    if (pipe_format_to_chroma_format(template->buffer_format) != PIPE_VIDEO_CHROMA_FORMAT_420) {
+       debug_printf("Must use 4:2:0 format\n");
+       return NULL;
+@@ -659,17 +680,27 @@ nv84_video_buffer_create(struct pipe_context *pipe,
+    buffer->base.get_sampler_view_planes = nv84_video_buffer_sampler_view_planes;
+    buffer->base.get_sampler_view_components = nv84_video_buffer_sampler_view_components;
+    buffer->base.get_surfaces = nv84_video_buffer_surfaces;
+-   buffer->base.interlaced = true;
++   buffer->base.interlaced = interlaced;
+ 
+    memset(&templ, 0, sizeof(templ));
+-   templ.target = PIPE_TEXTURE_2D_ARRAY;
++   templ.target = interlaced ? PIPE_TEXTURE_2D_ARRAY : PIPE_TEXTURE_2D;
+    templ.depth0 = 1;
+    templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
+    templ.format = PIPE_FORMAT_R8_UNORM;
+-   templ.width0 = align(template->width, 2);
+-   templ.height0 = align(template->height, 4) / 2;
+-   templ.flags = NV50_RESOURCE_FLAG_VIDEO | NV50_RESOURCE_FLAG_NOALLOC;
+-   templ.array_size = 2;
++   if (interlaced) {
++      templ.width0 = align(template->width, 2);
++      templ.height0 = align(template->height, 4) / 2;
++      templ.flags = NV50_RESOURCE_FLAG_VIDEO | NV50_RESOURCE_FLAG_NOALLOC;
++      templ.array_size = 2;
++   } else {
++      /* VP decodes into the interlaced buffer in buffer->fields, and the
++       * decoder weaves it into this one, see nv84_decoder_weave().
++       */
++      templ.width0 = align(template->width, 2);
++      templ.height0 = align(template->height, 2);
++      templ.flags = NV50_RESOURCE_FLAG_VIDEO;
++      templ.array_size = 1;
++   }
+ 
+    cfg.nv50.tile_mode = 0x20;
+    cfg.nv50.memtype = 0x70;
+@@ -685,27 +716,37 @@ nv84_video_buffer_create(struct pipe_context *pipe,
+    if (!buffer->resources[1])
+       goto error;
+ 
+-   mt0 = nv50_miptree(buffer->resources[0]);
+-   mt1 = nv50_miptree(buffer->resources[1]);
++   if (interlaced) {
++      mt0 = nv50_miptree(buffer->resources[0]);
++      mt1 = nv50_miptree(buffer->resources[1]);
+ 
+-   bo_size = mt0->total_size + mt1->total_size;
+-   if (nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM | NOUVEAU_BO_NOSNOOP, 0,
+-                      bo_size, &cfg, &buffer->interlaced))
+-      goto error;
+-   /* XXX Change reference frame management so that this is only allocated in
+-    * the decoder when necessary. */
+-   if (nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM | NOUVEAU_BO_NOSNOOP, 0,
+-                      bo_size, &cfg, &buffer->full))
+-      goto error;
++      bo_size = mt0->total_size + mt1->total_size;
++      if (nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM | NOUVEAU_BO_NOSNOOP, 0,
++                         bo_size, &cfg, &buffer->interlaced))
++         goto error;
++      /* XXX Change reference frame management so that this is only allocated in
++       * the decoder when necessary. */
++      if (nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM | NOUVEAU_BO_NOSNOOP, 0,
++                         bo_size, &cfg, &buffer->full))
++         goto error;
++
++      nouveau_bo_ref(buffer->interlaced, &mt0->base.bo);
++      mt0->base.domain = NOUVEAU_BO_VRAM;
++      mt0->base.address = buffer->interlaced->offset;
+ 
+-   nouveau_bo_ref(buffer->interlaced, &mt0->base.bo);
+-   mt0->base.domain = NOUVEAU_BO_VRAM;
+-   mt0->base.address = buffer->interlaced->offset;
++      nouveau_bo_ref(buffer->interlaced, &mt1->base.bo);
++      mt1->base.domain = NOUVEAU_BO_VRAM;
++      mt1->base.offset = mt0->total_size;
++      mt1->base.address = buffer->interlaced->offset + mt0->total_size;
++   } else {
++      struct pipe_video_buffer fields_templ = *template;
+ 
+-   nouveau_bo_ref(buffer->interlaced, &mt1->base.bo);
+-   mt1->base.domain = NOUVEAU_BO_VRAM;
+-   mt1->base.offset = mt0->total_size;
+-   mt1->base.address = buffer->interlaced->offset + mt0->total_size;
++      fields_templ.interlaced = true;
++      buffer->fields = (struct nv84_video_buffer *)
++         nv84_video_buffer_create(pipe, &fields_templ);
++      if (!buffer->fields)
++         goto error;
++   }
+ 
+    memset(&sv_templ, 0, sizeof(sv_templ));
+    for (component = 0, i = 0; i < 2; ++i ) {
+@@ -734,6 +775,10 @@ nv84_video_buffer_create(struct pipe_context *pipe,
+    for (j = 0; j < 2; ++j) {
+       u_surface_default_template(&surf_templ, buffer->resources[j]);
+       surf_templ.first_layer = surf_templ.last_layer = 0;
++      if (!interlaced) {
++         buffer->surfaces[j] = surf_templ;
++         continue;
++      }
+       buffer->surfaces[j * 2] = surf_templ;
+ 
+       surf_templ.first_layer = surf_templ.last_layer = 1;
+@@ -825,7 +870,7 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
+    case PIPE_VIDEO_CAP_MAX_HEIGHT:
+       return 2048;
+    case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return false;
++      return true;
+    case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+       return 8192; /* vc-1 actually has 8190, but this is not supported */
+    default:
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.h b/src/gallium/drivers/nouveau/nv50/nv84_video.h
+index 85d5964091e5..5591473264cf 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video.h
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video.h
+@@ -53,8 +53,22 @@ struct nv84_video_buffer {
+    struct nouveau_bo *interlaced, *full;
+    int mvidx;
+    unsigned frame_num, frame_num_max;
++
++   /* For a progressive buffer: the interlaced one VP decodes into, also
++    * used when the picture is a reference.
++    */
++   struct nv84_video_buffer *fields;
+ };
+ 
++/* The interlaced buffer VP works on for this one */
++static inline struct nv84_video_buffer *
++nv84_video_fields(struct pipe_video_buffer *buffer)
++{
++   struct nv84_video_buffer *buf = (struct nv84_video_buffer *)buffer;
++
++   return buf && buf->fields ? buf->fields : buf;
++}
++
+ struct nv84_decoder {
+    struct pipe_video_codec base;
+    struct nouveau_client *client;
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video_bsp.c b/src/gallium/drivers/nouveau/nv50/nv84_video_bsp.c
+index f988d0af2129..00ad7a971058 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video_bsp.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video_bsp.c
+@@ -114,7 +114,7 @@ nv84_decoder_bsp(struct nv84_decoder *dec,
+ 
+    for (i = 0; i < 16; i++) {
+       struct iref *ref = &params.ipicparm.refs[i];
+-      struct nv84_video_buffer *frame = (struct nv84_video_buffer *)desc->ref[i];
++      struct nv84_video_buffer *frame = nv84_video_fields(desc->ref[i]);
+       if (!frame) break;
+       /* The frame index is relative to the last IDR frame. So once the frame
+        * num goes back to 0, previous reference frames need to have a negative
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video_vp.c b/src/gallium/drivers/nouveau/nv50/nv84_video_vp.c
+index 1e1506e75d8f..1cd49ca89395 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video_vp.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video_vp.c
+@@ -124,7 +124,7 @@ nv84_decoder_vp_h264(struct nv84_decoder *dec,
+    struct nouveau_bo *ref2_default = dest->full;
+ 
+    for (i = 0; i < 16; i++) {
+-      struct nv84_video_buffer *buf = (struct nv84_video_buffer *)desc->ref[i];
++      struct nv84_video_buffer *buf = nv84_video_fields(desc->ref[i]);
+       struct nouveau_bo *bo1, *bo2;
+       if (buf) {
+          bo1 = buf->interlaced;
+@@ -482,8 +482,8 @@ nv84_decoder_vp_mpeg12(struct nv84_decoder *dec,
+                        struct nv84_video_buffer *dest)
+ {
+    struct nouveau_pushbuf *push = dec->vp_pushbuf;
+-   struct nv84_video_buffer *ref1 = (struct nv84_video_buffer *)desc->ref[0];
+-   struct nv84_video_buffer *ref2 = (struct nv84_video_buffer *)desc->ref[1];
++   struct nv84_video_buffer *ref1 = nv84_video_fields(desc->ref[0]);
++   struct nv84_video_buffer *ref2 = nv84_video_fields(desc->ref[1]);
+    struct nouveau_pushbuf_refn bo_refs[] = {
+       { dest->interlaced, NOUVEAU_BO_RDWR | NOUVEAU_BO_VRAM },
+       { NULL, NOUVEAU_BO_RDWR | NOUVEAU_BO_VRAM },
+-- 
+GitLab
+
+
+From 71dd2b9dca27848049f77e7c8e034db85a7835a6 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 12:10:48 +0100
+Subject: [PATCH 3/4] frontends/va: drop interlaced surfaces
+
+Every driver now gives progressive video buffers, so the frontend no
+longer asks for interlaced surfaces, and the code that refused to export
+or derive them, or copied them field by field, can go.
+
+Generated-by: LLM
+---
+ src/gallium/frontends/va/image.c    | 53 +++++++++++------------------
+ src/gallium/frontends/va/postproc.c |  5 ++-
+ src/gallium/frontends/va/surface.c  | 20 +----------
+ 3 files changed, 23 insertions(+), 55 deletions(-)
+
+diff --git a/src/gallium/frontends/va/image.c b/src/gallium/frontends/va/image.c
+index 509567625251..0d79668bf47a 100644
+--- a/src/gallium/frontends/va/image.c
++++ b/src/gallium/frontends/va/image.c
+@@ -87,7 +87,7 @@ vlVaVideoSurfaceSize(vlVaSurface *p_surf, int component,
+ 
+    vl_video_buffer_adjust_size(width, height, component,
+                                pipe_format_to_chroma_format(p_surf->templat.buffer_format),
+-                               p_surf->templat.interlaced);
++                               false);
+ }
+ 
+ VAStatus
+@@ -300,11 +300,6 @@ vlVaDeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *image)
+       goto exit_on_error;
+    }
+ 
+-   if (surf->buffer->interlaced) {
+-      status = VA_STATUS_ERROR_OPERATION_FAILED;
+-      goto exit_on_error;
+-   }
+-
+    if (util_format_get_num_planes(surf->buffer->buffer_format) >= 2 &&
+        (!screen->get_video_param(screen, PIPE_VIDEO_PROFILE_UNKNOWN,
+                                          PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+@@ -450,7 +445,7 @@ vlVaGetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
+    struct pipe_resource *view_resources[VL_NUM_COMPONENTS];
+    enum pipe_format format;
+    uint8_t *data[3];
+-   unsigned pitches[3], i, j;
++   unsigned pitches[3], i;
+ 
+    if (!ctx)
+       return VA_STATUS_ERROR_INVALID_CONTEXT;
+@@ -566,27 +561,23 @@ vlVaGetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
+       if (!view_resources[i]) continue;
+       vl_video_buffer_adjust_size(&box_w, &box_h, i,
+                                   pipe_format_to_chroma_format(surf->templat.buffer_format),
+-                                  surf->templat.interlaced);
++                                  false);
+       vl_video_buffer_adjust_size(&box_x, &box_y, i,
+                                   pipe_format_to_chroma_format(surf->templat.buffer_format),
+-                                  surf->templat.interlaced);
+-      for (j = 0; j < view_resources[i]->array_size; ++j) {
+-         struct pipe_box box;
+-         u_box_3d(box_x, box_y, j, box_w, box_h, 1, &box);
+-         struct pipe_transfer *transfer;
+-         uint8_t *map;
+-         map = drv->pipe->texture_map(drv->pipe, view_resources[i], 0,
+-                  PIPE_MAP_READ, &box, &transfer);
+-         if (!map) {
+-            mtx_unlock(&drv->mutex);
+-            return VA_STATUS_ERROR_OPERATION_FAILED;
+-         }
+-         util_copy_rect((uint8_t*)(data[i] + pitches[i] * j),
+-            view_resources[i]->format,
+-            pitches[i] * view_resources[i]->array_size, 0, 0,
+-            box.width, box.height, map, transfer->stride, 0, 0);
+-         pipe_texture_unmap(drv->pipe, transfer);
++                                  false);
++      struct pipe_box box;
++      u_box_2d(box_x, box_y, box_w, box_h, &box);
++      struct pipe_transfer *transfer;
++      uint8_t *map;
++      map = drv->pipe->texture_map(drv->pipe, view_resources[i], 0,
++               PIPE_MAP_READ, &box, &transfer);
++      if (!map) {
++         mtx_unlock(&drv->mutex);
++         return VA_STATUS_ERROR_OPERATION_FAILED;
+       }
++      util_copy_rect(data[i], view_resources[i]->format, pitches[i], 0, 0,
++         box.width, box.height, map, transfer->stride, 0, 0);
++      pipe_texture_unmap(drv->pipe, transfer);
+    }
+    if (tmp_surf)
+       vlVaDestroySurface(drv, tmp_surf);
+@@ -631,14 +622,10 @@ vlVaUploadImage(vlVaDriver *drv, vlVaSurface *surf, vlVaBuffer *buf, VAImage *im
+       tex = view_resources[i];
+ 
+       vlVaVideoSurfaceSize(surf, i, &width, &height);
+-      for (unsigned j = 0; j < tex->array_size; ++j) {
+-         struct pipe_box dst_box;
+-         u_box_3d(0, 0, j, width, height, 1, &dst_box);
+-         drv->pipe->texture_subdata(drv->pipe, tex, 0,
+-                                    PIPE_MAP_WRITE, &dst_box,
+-                                    data[i] + pitches[i] * j,
+-                                    pitches[i] * view_resources[i]->array_size, 0);
+-      }
++      struct pipe_box dst_box;
++      u_box_2d(0, 0, width, height, &dst_box);
++      drv->pipe->texture_subdata(drv->pipe, tex, 0, PIPE_MAP_WRITE, &dst_box,
++                                 data[i], pitches[i], 0);
+    }
+ 
+    if (transfer)
+diff --git a/src/gallium/frontends/va/postproc.c b/src/gallium/frontends/va/postproc.c
+index 6548de3ed0ce..5d99ab40ef61 100644
+--- a/src/gallium/frontends/va/postproc.c
++++ b/src/gallium/frontends/va/postproc.c
+@@ -435,8 +435,7 @@ vlVaApplyDeint(vlVaDriver *drv, vlVaContext *context,
+       return current;
+ 
+    if (context->deint && (context->deint->video_width != current->width ||
+-       context->deint->video_height != current->height ||
+-       context->deint->interleaved != !current->interlaced)) {
++       context->deint->video_height != current->height)) {
+       vl_deint_filter_cleanup(context->deint);
+       FREE(context->deint);
+       context->deint = NULL;
+@@ -445,7 +444,7 @@ vlVaApplyDeint(vlVaDriver *drv, vlVaContext *context,
+    if (!context->deint) {
+       context->deint = MALLOC(sizeof(struct vl_deint_filter));
+       if (!vl_deint_filter_init(context->deint, drv->pipe, current->width,
+-                                current->height, false, false, !current->interlaced)) {
++                                current->height, false, false, true)) {
+          FREE(context->deint);
+          context->deint = NULL;
+          return current;
+diff --git a/src/gallium/frontends/va/surface.c b/src/gallium/frontends/va/surface.c
+index 34a3fc821e62..63cba36da9e7 100644
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -754,7 +754,7 @@ vlVaHandleSurfaceAllocate(vlVaDriver *drv, vlVaSurface *surface,
+          if (!surfaces[i].texture)
+             continue;
+ 
+-         if (i > !!surface->buffer->interlaced)
++         if (i > 0)
+             c.f[0] = c.f[1] = c.f[2] = c.f[3] = 0.5f;
+ 
+          unsigned width, height;
+@@ -975,19 +975,6 @@ vlVaCreateSurfaces2(VADriverContextP ctx, unsigned int format,
+       assert(0);
+    }
+ 
+-   if (!modifiers)
+-      templat.interlaced =
+-         !pscreen->get_video_param(pscreen, PIPE_VIDEO_PROFILE_UNKNOWN,
+-                                   PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+-                                   PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE);
+-
+-#ifndef _WIN32
+-   if (expected_fourcc != VA_FOURCC_NV12 || memory_attribute || prime_desc)
+-#else
+-   if (expected_fourcc != VA_FOURCC_NV12 || memory_attribute)
+-#endif
+-     templat.interlaced = false;
+-
+    templat.buffer_format = VaFourccToPipeFormat(expected_fourcc);
+    templat.width = width;
+    templat.height = height;
+@@ -1166,11 +1153,6 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
+       return VA_STATUS_ERROR_INVALID_SURFACE;
+    }
+ 
+-   if (surf->buffer->interlaced) {
+-      mtx_unlock(&drv->mutex);
+-      return VA_STATUS_ERROR_INVALID_SURFACE;
+-   }
+-
+    surfaces = surf->buffer->get_surfaces(surf->buffer);
+ 
+    usage = 0;
+-- 
+GitLab
+
+
+From 4376ba0aa34c5eb34c2441609a959b10a2dd5e00 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 12:12:14 +0100
+Subject: [PATCH 4/4] gallium: remove PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE
+
+Nothing queries it since the VA frontend stopped asking for interlaced
+surfaces, and every driver returned true except nouveau, which now
+gives progressive buffers too.
+
+Generated-by: LLM
+---
+ src/gallium/drivers/d3d12/d3d12_video_screen.cpp | 7 -------
+ src/gallium/drivers/nouveau/nouveau_video.c      | 2 --
+ src/gallium/drivers/nouveau/nouveau_vp3_video.c  | 2 --
+ src/gallium/drivers/nouveau/nv50/nv84_video.c    | 2 --
+ src/gallium/drivers/r600/radeon_video.c          | 4 ----
+ src/gallium/drivers/radeonsi/mm/si_mm_screen.c   | 1 -
+ src/gallium/drivers/virgl/virgl_screen.c         | 4 +---
+ src/gallium/drivers/zink/zink_screen.c           | 7 -------
+ src/gallium/include/pipe/p_video_enums.h         | 1 -
+ 9 files changed, 1 insertion(+), 29 deletions(-)
+
+diff --git a/src/gallium/drivers/d3d12/d3d12_video_screen.cpp b/src/gallium/drivers/d3d12/d3d12_video_screen.cpp
+index 6f18fb1cf53c..f3b8cf3a773e 100644
+--- a/src/gallium/drivers/d3d12/d3d12_video_screen.cpp
++++ b/src/gallium/drivers/d3d12/d3d12_video_screen.cpp
+@@ -2399,8 +2399,6 @@ d3d12_screen_get_video_param_decode(struct pipe_screen *pscreen,
+          }
+          return 0;
+       } break;
+-      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-         return true;
+       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
+          return true;
+       default:
+@@ -2423,7 +2421,6 @@ d3d12_screen_get_video_param_postproc(struct pipe_screen *pscreen,
+       case PIPE_VIDEO_CAP_MIN_WIDTH:
+       case PIPE_VIDEO_CAP_MIN_HEIGHT:
+       case PIPE_VIDEO_CAP_SUPPORTED:
+-      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
+       case PIPE_VIDEO_CAP_VPP_MAX_INPUT_WIDTH:
+       case PIPE_VIDEO_CAP_VPP_MAX_INPUT_HEIGHT:
+@@ -2473,8 +2470,6 @@ d3d12_screen_get_video_param_postproc(struct pipe_screen *pscreen,
+                return maxSupportedInput.Height;
+             } else if (param == PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP) {
+                return true;
+-            } else if (param == PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE) {
+-               return true;
+             } else if (param == PIPE_VIDEO_CAP_VPP_MAX_INPUT_WIDTH) {
+                return supportCaps.ScaleSupport.OutputSizeRange.MaxWidth;
+             } else if (param == PIPE_VIDEO_CAP_VPP_MAX_INPUT_HEIGHT) {
+@@ -2785,8 +2780,6 @@ d3d12_screen_get_video_param_encode(struct pipe_screen *pscreen,
+          }
+          return 0;
+       } break;
+-      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-         return true;
+       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
+          return true;
+       case PIPE_VIDEO_CAP_ENC_RATE_CONTROL_QVBR:
+diff --git a/src/gallium/drivers/nouveau/nouveau_video.c b/src/gallium/drivers/nouveau/nouveau_video.c
+index e78d9c1c0f52..bff1ce665859 100644
+--- a/src/gallium/drivers/nouveau/nouveau_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_video.c
+@@ -835,8 +835,6 @@ nouveau_screen_get_video_param(struct pipe_screen *pscreen,
+    case PIPE_VIDEO_CAP_MAX_WIDTH:
+    case PIPE_VIDEO_CAP_MAX_HEIGHT:
+       return vl_video_buffer_max_size(pscreen);
+-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return true;
+    default:
+       debug_printf("unknown video param: %d\n", param);
+       return 0;
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 6b242ed41ce0..0078b6e83568 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -494,8 +494,6 @@ nouveau_vp3_screen_get_video_param(struct pipe_screen *pscreen,
+          debug_printf("unknown video codec: %d\n", codec);
+          return 0;
+       }
+-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return true;
+    case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+       switch (codec) {
+       case PIPE_VIDEO_FORMAT_MPEG12:
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.c b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+index 80643a7d99bf..6274dd95f50e 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+@@ -869,8 +869,6 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
+    case PIPE_VIDEO_CAP_MAX_WIDTH:
+    case PIPE_VIDEO_CAP_MAX_HEIGHT:
+       return 2048;
+-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return true;
+    case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+       return 8192; /* vc-1 actually has 8190, but this is not supported */
+    default:
+diff --git a/src/gallium/drivers/r600/radeon_video.c b/src/gallium/drivers/r600/radeon_video.c
+index 1708af24417a..662e15e2be5f 100644
+--- a/src/gallium/drivers/r600/radeon_video.c
++++ b/src/gallium/drivers/r600/radeon_video.c
+@@ -208,8 +208,6 @@ int rvid_get_video_param(struct pipe_screen *screen,
+ 			return 2048;
+ 		case PIPE_VIDEO_CAP_MAX_HEIGHT:
+ 			return 1152;
+-		case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-			return true;
+ 		default:
+ 			return 0;
+ 		}
+@@ -237,8 +235,6 @@ int rvid_get_video_param(struct pipe_screen *screen,
+ 		return 2048;
+ 	case PIPE_VIDEO_CAP_MAX_HEIGHT:
+ 		return 1152;
+-	case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-		return true;
+ 	default:
+ 		return 0;
+ 	}
+diff --git a/src/gallium/drivers/radeonsi/mm/si_mm_screen.c b/src/gallium/drivers/radeonsi/mm/si_mm_screen.c
+index 4aa6be7d6979..b5c1fb1a9fa5 100644
+--- a/src/gallium/drivers/radeonsi/mm/si_mm_screen.c
++++ b/src/gallium/drivers/radeonsi/mm/si_mm_screen.c
+@@ -82,7 +82,6 @@ static int si_video_get_param(struct pipe_screen *screen, enum pipe_video_profil
+    enum ac_video_codec codec = si_pipe_video_profile_to_codec(profile);
+ 
+    switch (param) {
+-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+    case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
+       return 1;
+ 
+diff --git a/src/gallium/drivers/virgl/virgl_screen.c b/src/gallium/drivers/virgl/virgl_screen.c
+index 2515347983e8..c437a28006b0 100644
+--- a/src/gallium/drivers/virgl/virgl_screen.c
++++ b/src/gallium/drivers/virgl/virgl_screen.c
+@@ -135,7 +135,7 @@ virgl_get_video_param(struct pipe_screen *screen,
+     *      pipe->screen,
+     *      PIPE_VIDEO_PROFILE_UNKNOWN,
+     *      PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
+-    *      PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE
++    *      PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE
+     *   );
+     * All parameters need to check the vcaps.
+     */
+@@ -146,8 +146,6 @@ virgl_get_video_param(struct pipe_screen *screen,
+          return vcaps ? vcaps->max_width : 0;
+       case PIPE_VIDEO_CAP_MAX_HEIGHT:
+          return vcaps ? vcaps->max_height : 0;
+-      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-         return vcaps ? vcaps->supports_progressive : true;
+       case PIPE_VIDEO_CAP_MAX_MACROBLOCKS:
+          return vcaps ? vcaps->max_macroblocks : 0;
+       case PIPE_VIDEO_CAP_MAX_TEMPORAL_LAYERS:
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index a58378be2fbd..d559bb0ce61b 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -3077,13 +3077,6 @@ zink_get_video_param(struct pipe_screen *screen,
+       break;
+    }
+ 
+-   switch (param) {
+-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+-      return true;
+-   default:
+-      break;
+-   }
+-
+    if (!is_supported)
+       return 0;
+ 
+diff --git a/src/gallium/include/pipe/p_video_enums.h b/src/gallium/include/pipe/p_video_enums.h
+index 89449d9db881..3630a3b2efdb 100644
+--- a/src/gallium/include/pipe/p_video_enums.h
++++ b/src/gallium/include/pipe/p_video_enums.h
+@@ -85,7 +85,6 @@ enum pipe_video_cap
+    PIPE_VIDEO_CAP_SUPPORTED = 0,
+    PIPE_VIDEO_CAP_MAX_WIDTH = 2,
+    PIPE_VIDEO_CAP_MAX_HEIGHT = 3,
+-   PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE = 6,
+    PIPE_VIDEO_CAP_MAX_MACROBLOCKS = 10,
+    PIPE_VIDEO_CAP_MAX_TEMPORAL_LAYERS = 11,
+    PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE = 12,
+-- 
+GitLab
+

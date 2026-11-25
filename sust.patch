@@ -1,0 +1,73 @@
+From 24005a61a19eb3fdf7e4fd5edf84e1f73edd14c1 Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Mon, 9 Nov 2026 23:31:11 -0500
+Subject: [PATCH 1/2] nak: Fix mask for SuStGa
+
+This was incorrect for intrinsics that write fewer than 4 components.
+Copy the mask code from nir_intrinsic_bindless_image_store instead.
+
+Closes: https://gitlab.freedesktop.org/mesa/mesa/-/work_items/16834
+Fixes: ac3fd5768bd ("nak: Add surface address ops")
+Reviewed-by: Karol Herbst <kherbst@redhat.com>
+Reviewed-by: Lorenzo Rossi <lorenzo.rossi@collabora.com>
+---
+ src/nouveau/compiler/nak/from_nir.rs | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/nouveau/compiler/nak/from_nir.rs b/src/nouveau/compiler/nak/from_nir.rs
+index 1aeb6be1a451..d8642360c0d1 100644
+--- a/src/nouveau/compiler/nak/from_nir.rs
++++ b/src/nouveau/compiler/nak/from_nir.rs
+@@ -2986,8 +2986,12 @@ impl<'a> ShaderFromNir<'a> {
+                 let out_of_bounds = self.get_src(&srcs[2]);
+ 
+                 let data = self.get_src(&srcs[3]);
++
++                let comps = intrin.num_components;
++                assert!(srcs[3].bit_size() == 32);
++                assert!(comps == 1 || comps == 2 || comps == 4);
+                 let image_access =
+-                    ImageAccess::Formatted(ChannelMask::new(0xf));
++                    ImageAccess::Formatted(ChannelMask::for_comps(comps));
+ 
+                 let flags = intrin.flags();
+                 let offset_mode = match flags {
+-- 
+GitLab
+
+
+From b6466c2dc836c2e1537a365ca40799d00c95c30f Mon Sep 17 00:00:00 2001
+From: Mel Henning <mhenning@darkrefraction.com>
+Date: Tue, 24 Nov 2026 17:56:51 -0500
+Subject: [PATCH 2/2] nak: Lower 64-bit sustga to 32-bit
+
+Fixes: e5d4c4934d7 ("nak: Add an image address lowering pass")
+---
+ src/nouveau/compiler/nak_nir_lower_image_addrs.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/nouveau/compiler/nak_nir_lower_image_addrs.c b/src/nouveau/compiler/nak_nir_lower_image_addrs.c
+index 150c891f92b7..809bb2bc5b16 100644
+--- a/src/nouveau/compiler/nak_nir_lower_image_addrs.c
++++ b/src/nouveau/compiler/nak_nir_lower_image_addrs.c
+@@ -462,7 +462,16 @@ lower_image_access(nir_builder *b, nir_intrinsic_instr *intrin)
+    }
+    case nir_intrinsic_image_deref_store: {
+       nir_def *fmt = load_su_info(b, deref, format_info);
+-      nir_sustga_nv(b, addr, fmt, is_oob, intrin->src[3].ssa,
++      nir_def *data = intrin->src[3].ssa;
++
++      if (data->bit_size == 64) {
++         /* See also shrink_image_store in nak_nir_lower_tex.c */
++         assert(format == PIPE_FORMAT_R64_UINT ||
++                format == PIPE_FORMAT_R64_SINT);
++         data = nir_unpack_64_2x32(b, nir_channel(b, data, 0));
++      }
++
++      nir_sustga_nv(b, addr, fmt, is_oob, data,
+                     .access = nir_intrinsic_access(intrin),
+                     .flags = offset_mode);
+       break;
+-- 
+GitLab
+

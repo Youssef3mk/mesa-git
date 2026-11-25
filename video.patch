@@ -1,0 +1,403 @@
+From 1e7b9c0112eeaa317ab97b39645383b2a57aaf43 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:24 +0200
+Subject: [PATCH 1/5] nouveau: keep H.264 references in the same VP slot
+
+VP3 to VP5 identify reference pictures by their slot (fifo_idx), and the
+motion vectors stored with each picture refer to those slots. ffmpeg
+puts the newest reference first, so the slots shift and B frames with
+temporal direct prediction use the wrong pictures, which shows as blocks
+in moving areas.
+
+Keep each reference in the slot it already had and put new references
+in free slots.
+
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
+---
+ .../drivers/nouveau/nouveau_vp3_video.h       |  2 ++
+ .../drivers/nouveau/nouveau_vp3_video_vp.c    | 32 ++++++++++++++++---
+ 2 files changed, 29 insertions(+), 5 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.h b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+index e49080733616..47c555ad87a3 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.h
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+@@ -110,6 +110,8 @@ struct nouveau_vp3_decoder {
+       unsigned decoded_bottom : 1;
+       unsigned decoded_first : 1;
+    } refs[17];
++   /* H.264 reference pictures by fifo_idx - 1, as the last picture used them */
++   struct nouveau_vp3_video_buffer *h264_refs[16];
+    unsigned fence_seq, fw_sizes, last_frame_num, tmp_stride, ref_stride;
+ 
+    unsigned bsp_idx, vp_idx, ppp_idx;
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 4e5a46ce3bbd..00d521c49341 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -235,7 +235,7 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+                                  char *map)
+ {
+    struct h264_picparm_vp stub_h = {}, *h = &stub_h;
+-   unsigned ring, i, j = 0;
++   unsigned ring, i, j = 0, num_refs, slot[16];
+    assert(offsetof(struct h264_picparm_vp, u224) == 0x224);
+    *is_ref = d->is_reference;
+    dec->last_frame_num = d->frame_num;
+@@ -278,10 +278,33 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+    memcpy(h->m4x4, d->pps->ScalingList4x4, sizeof(h->m4x4));
+    memcpy(h->m8x8, d->pps->ScalingList8x8, sizeof(h->m8x8));
+    h->u220 = 0;
+-   for (i = 0; i < d->num_ref_frames; ++i) {
+-      if (!d->ref[i])
+-         break;
++
++   /* The motion vectors VP stores with a picture name the pictures they
++    * point to by fifo_idx. Temporal direct prediction in B slices reads the
++    * vectors of the colocated picture, so these names must still point to
++    * the same pictures: a reference keeps its fifo_idx for as long as it is
++    * one. Applications may reorder the reference list at every picture
++    * (ffmpeg puts the newest reference first), so keep each reference in
++    * the slot it had for the previous picture and put new ones in free
++    * slots.
++    */
++   for (num_refs = 0; num_refs < d->num_ref_frames && d->ref[num_refs]; ++num_refs) {
++      for (j = 0; j < 16 && dec->h264_refs[j] != (void *)d->ref[num_refs]; ++j);
++      slot[num_refs] = j;
++      if (j < 16)
++         refs[j] = dec->h264_refs[j];
++   }
++   for (i = 0; i < num_refs; ++i) {
++      if (slot[i] < 16)
++         continue;
++      for (j = 0; refs[j]; ++j);
++      slot[i] = j;
+       refs[j] = (struct nouveau_vp3_video_buffer *)d->ref[i];
++   }
++   memcpy(dec->h264_refs, refs, sizeof(dec->h264_refs));
++
++   for (i = 0; i < num_refs; ++i) {
++      j = slot[i];
+       h->refs[j].fifo_idx = j + 1;
+       h->refs[j].tmp_idx = refs[j]->valid_ref;
+       assert(dec->refs[refs[j]->valid_ref].vidbuf == refs[j]);
+@@ -302,7 +325,6 @@ nouveau_vp3_fill_picparm_h264_vp(struct nouveau_vp3_decoder *dec,
+          dec->refs[refs[j]->valid_ref].decoded_bottom && d->bottom_is_reference[i] ?
+          1 + d->is_long_term[i] : 0;
+       h->refs[j].pad = 0;
+-      j++;
+    }
+    for (; i < 16; ++i)
+       assert(!d->ref[i]);
+-- 
+GitLab
+
+
+From 36f26a428f0d5023cb8fe0fe66a3b1a9bd4d6ccd Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Sat, 17 Oct 2026 21:34:25 +0200
+Subject: [PATCH 2/5] nouveau: wait for the video engines before destroying a
+ vp3 decoder
+
+Destroying a decoder while the engines are still busy leaves the channel
+unable to idle, and the next decoder hangs the GPU in g84_ectx_bind.
+This happens when a player stops a video mid-decode.
+
+Wait for the engine buffers before tearing the decoder down.
+
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
+---
+ .../drivers/nouveau/nouveau_vp3_video.c        | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 5130ed6d6386..7753f22764fa 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -205,8 +205,26 @@ static void
+ nouveau_vp3_decoder_destroy(struct pipe_video_codec *decoder)
+ {
+    struct nouveau_vp3_decoder *dec = (struct nouveau_vp3_decoder *)decoder;
++   struct nouveau_bo *engine_bos[] = {
++      dec->ref_bo, dec->bitplane_bo, dec->inter_bo[0], dec->inter_bo[1],
++   };
++   unsigned b;
+    int i;
+ 
++   /* The engines may still be working through the last pictures. If their
++    * objects and channels go away now, the kernel cannot idle the channel
++    * and the next decoder that binds the engines hangs the GPU. Every stage
++    * reads or writes one of these buffers, so wait for them first.
++    */
++   for (b = 0; b < ARRAY_SIZE(engine_bos); ++b) {
++      if (engine_bos[b])
++         nouveau_bo_wait(engine_bos[b], NOUVEAU_BO_RDWR, dec->client);
++   }
++   for (i = 0; i < NOUVEAU_VP3_VIDEO_QDEPTH; ++i) {
++      if (dec->bsp_bo[i])
++         nouveau_bo_wait(dec->bsp_bo[i], NOUVEAU_BO_RDWR, dec->client);
++   }
++
+    nouveau_bo_ref(NULL, &dec->ref_bo);
+    nouveau_bo_ref(NULL, &dec->bitplane_bo);
+    nouveau_bo_ref(NULL, &dec->inter_bo[0]);
+-- 
+GitLab
+
+
+From 261d03a78d3d8f4064d77bb6a95a47ab26b1f97c Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Mon, 2 Nov 2026 13:37:31 +0100
+Subject: [PATCH 3/5] nvc0: accept tiled modifiers for planar YUV formats
+
+nvc0 derives the storage type of a modifier from the block size of the
+format, which planar YUV formats don't have, so it accepts only LINEAR
+for NV12. Importing a tiled NV12 buffer that nvc0 exported, as Chromium
+does with VA-API frames, then fails in dri2_from_dma_bufs.
+
+For planar formats, take the storage type of the first plane's format.
+
+Cc: mesa-stable
+Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Generated-by: LLM
+---
+ .../drivers/nouveau/nvc0/nvc0_resource.c      | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
+index 98339c09928f..ff2deca8f94c 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
+@@ -1,6 +1,7 @@
+ #include "drm-uapi/drm_fourcc.h"
+ 
+ #include "pipe/p_context.h"
++#include "util/format/u_format.h"
+ #include "nvc0/nvc0_resource.h"
+ #include "nouveau_context.h"
+ #include "nouveau_screen.h"
+@@ -40,6 +41,18 @@ nvc0_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *res)
+       nv50_miptree_destroy(pscreen, res);
+ }
+ 
++/* Planar YUV formats have no block size, so take the storage type of their
++ * first plane: their planes are color formats that share one.
++ */
++static uint32_t
++nvc0_dmabuf_storage_type(struct pipe_screen *screen, enum pipe_format format)
++{
++   if (util_format_get_num_planes(format) > 1)
++      format = util_format_get_plane_format(format, 0);
++
++   return nvc0_choose_tiled_storage_type(screen, format, 0, false);
++}
++
+ static void
+ nvc0_query_dmabuf_modifiers(struct pipe_screen *screen,
+                             enum pipe_format format, int max,
+@@ -47,8 +60,7 @@ nvc0_query_dmabuf_modifiers(struct pipe_screen *screen,
+                             int *count)
+ {
+    const int s = nouveau_screen(screen)->tegra_sector_layout ? 0 : 1;
+-   const uint32_t uc_kind =
+-      nvc0_choose_tiled_storage_type(screen, format, 0, false);
++   const uint32_t uc_kind = nvc0_dmabuf_storage_type(screen, format);
+    const uint32_t num_uc = uc_kind ? 6 : 0; /* max block height = 32 GOBs */
+    const int num_supported = num_uc + 1; /* LINEAR is always supported */
+    const uint32_t kind_gen = nvc0_get_kind_generation(screen);
+@@ -87,8 +99,7 @@ nvc0_is_dmabuf_modifier_supported(struct pipe_screen *screen,
+                                   bool *external_only)
+ {
+    const int s = nouveau_screen(screen)->tegra_sector_layout ? 0 : 1;
+-   const uint32_t uc_kind =
+-      nvc0_choose_tiled_storage_type(screen, format, 0, false);
++   const uint32_t uc_kind = nvc0_dmabuf_storage_type(screen, format);
+    const uint32_t num_uc = uc_kind ? 6 : 0; /* max block height = 32 GOBs */
+    const uint32_t kind_gen = nvc0_get_kind_generation(screen);
+    int i;
+-- 
+GitLab
+
+
+From b48a704e4e4734154e1734353cf69124840c54d1 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 15:59:57 +0100
+Subject: [PATCH 4/5] nouveau: add a start code to vc1 simple and main pictures
+
+VP3 to VP5's BSP expects a start code in front of each VC-1 picture. The
+VA frontend only adds one for Advanced profile, so Simple and Main
+pictures decode to garbage, and VP can hang on a later picture.
+
+Add the frame start code in front of Simple and Main pictures.
+
+Generated-by: LLM
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+index a81090b575d3..92b8da42d231 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
+@@ -220,6 +220,18 @@ nouveau_vp3_bsp_begin(struct nouveau_vp3_decoder *dec)
+    memset(dec->bsp_ptr, 0, 0x200);
+ #endif
+    dec->bsp_ptr += 0x200;
++
++   /* BSP expects a start code in front of each VC-1 picture. Advanced
++    * profile bitstreams come with one, Simple and Main ones don't.
++    */
++   if (u_reduce_video_profile(dec->base.profile) == PIPE_VIDEO_FORMAT_VC1 &&
++       dec->base.profile != PIPE_VIDEO_PROFILE_VC1_ADVANCED) {
++      static const uint8_t start_code[] = { 0x00, 0x00, 0x01, 0x0d };
++
++      memcpy(dec->bsp_ptr, start_code, sizeof(start_code));
++      dec->bsp_ptr += sizeof(start_code);
++      str_bsp->w0[0] += sizeof(start_code);
++   }
+ }
+ 
+ void
+-- 
+GitLab
+
+
+From 808914e6faf619e13d3d5bf3186db0cd641fb221 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 15:59:58 +0100
+Subject: [PATCH 5/5] nouveau: refuse interlaced vc1 pictures on vp3 to vp5
+
+VP gets no field information for VC-1. It decodes the second field of a
+field-interlaced frame wrongly, and the frames after it too, without any
+error, and a stream mixing field pictures with interlaced frames hangs
+it.
+
+Refuse interlaced pictures, so that end_frame fails and the application
+can fall back to software decoding. The check for frame_coding_mode 3
+goes: the VA frontend passes field-interlaced pictures as 2.
+
+Generated-by: LLM
+---
+ .../drivers/nouveau/nouveau_vp3_video.h        | 16 ++++++++++++++++
+ .../drivers/nouveau/nouveau_vp3_video_vp.c     |  2 --
+ src/gallium/drivers/nouveau/nv50/nv98_video.c  | 18 +++++++++++++++++-
+ src/gallium/drivers/nouveau/nvc0/nvc0_video.c  |  3 +++
+ 4 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.h b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+index 47c555ad87a3..6f1316be97ee 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.h
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
+@@ -120,8 +120,24 @@ struct nouveau_vp3_decoder {
+     * frame.
+     */
+    char *bsp_ptr;
++
++   /* The current picture was refused, see nouveau_vp3_vc1_interlaced() */
++   bool skip_picture;
+ };
+ 
++/* VP gets no field information for VC-1: it decodes the second field of a
++ * field-interlaced frame wrongly, and interlaced frames can hang it.
++ * Interlaced pictures (frame_coding_mode 1 or 2, as the VA frontend passes
++ * them) are refused instead.
++ */
++static inline bool
++nouveau_vp3_vc1_interlaced(struct nouveau_vp3_decoder *dec,
++                           struct pipe_picture_desc *picture)
++{
++   return u_reduce_video_profile(dec->base.profile) == PIPE_VIDEO_FORMAT_VC1 &&
++          ((struct pipe_vc1_picture_desc *)picture)->frame_coding_mode != 0;
++}
++
+ struct comm {
+    uint32_t bsp_cur_index; // 000
+    uint32_t byte_ofs; // 004
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 00d521c49341..fafce3f70d13 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -423,8 +423,6 @@ void nouveau_vp3_vp_caps(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+    case PIPE_VIDEO_FORMAT_VC1: {
+       *caps = nouveau_vp3_fill_picparm_vc1_vp(dec, desc.vc1, refs, is_ref, vp);
+       nouveau_vp3_handle_references(dec, refs, dec->fence_seq, target);
+-      if (desc.vc1->frame_coding_mode == 3)
+-         debug_printf("Field-Interlaced possibly incorrectly handled\n");
+       dec->refs[target->valid_ref].decoded_top = 1;
+       dec->refs[target->valid_ref].decoded_bottom = 1;
+       return;
+diff --git a/src/gallium/drivers/nouveau/nv50/nv98_video.c b/src/gallium/drivers/nouveau/nv50/nv98_video.c
+index 220143654adf..cf97f91761f4 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv98_video.c
++++ b/src/gallium/drivers/nouveau/nv50/nv98_video.c
+@@ -37,13 +37,18 @@ nv98_decoder_decode_bitstream(struct pipe_video_codec *decoder,
+ {
+    struct nouveau_vp3_decoder *dec = (struct nouveau_vp3_decoder *)decoder;
+    struct nouveau_vp3_video_buffer *target = (struct nouveau_vp3_video_buffer *)video_target;
+-   uint32_t comm_seq = ++dec->fence_seq;
++   uint32_t comm_seq;
+    union pipe_desc desc;
+ 
+    unsigned vp_caps, is_ref;
+    ASSERTED unsigned ret; /* used in debug checks */
+    struct nouveau_vp3_video_buffer *refs[16] = {};
+ 
++   dec->skip_picture = nouveau_vp3_vc1_interlaced(dec, picture);
++   if (dec->skip_picture)
++      return;
++
++   comm_seq = ++dec->fence_seq;
+    desc.base = picture;
+ 
+    assert(target->base.buffer_format == PIPE_FORMAT_NV12);
+@@ -59,6 +64,16 @@ nv98_decoder_decode_bitstream(struct pipe_video_codec *decoder,
+    nv98_decoder_ppp(dec, desc, target, comm_seq);
+ }
+ 
++static int
++nv98_decoder_end_frame(struct pipe_video_codec *decoder,
++                       struct pipe_video_buffer *target,
++                       struct pipe_picture_desc *picture)
++{
++   struct nouveau_vp3_decoder *dec = (struct nouveau_vp3_decoder *)decoder;
++
++   return dec->skip_picture ? -1 : 0;
++}
++
+ static const struct nouveau_mclass
+ nv98_decoder_msvld[] = {
+    { G98_MSVLD, -1 },
+@@ -179,6 +194,7 @@ nv98_create_decoder(struct pipe_context *context,
+ 
+    dec->base.context = context;
+    dec->base.decode_bitstream = nv98_decoder_decode_bitstream;
++   dec->base.end_frame = nv98_decoder_end_frame;
+ 
+    for (i = 0; i < NOUVEAU_VP3_VIDEO_QDEPTH && !ret; ++i)
+       ret = nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM,
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
+index 9df9c33243c6..6b4594bfb7e2 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
+@@ -76,6 +76,9 @@ nvc0_decoder_end_frame(struct pipe_video_codec *decoder,
+    ASSERTED unsigned ret; /* used in debug checks */
+    struct nouveau_vp3_video_buffer *refs[16] = {};
+ 
++   if (nouveau_vp3_vc1_interlaced(dec, picture))
++      return -1;
++
+    desc.base = picture;
+ 
+    ret = nvc0_decoder_bsp_end(dec, desc, target, comm_seq, &vp_caps, &is_ref, refs);
+-- 
+GitLab
+
