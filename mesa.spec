@@ -57,9 +57,9 @@ URL:            http://www.mesa3d.org
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Patch0:         video.patch
 Patch1:         va.patch
-Patch2:         var.patch
-Patch3:         sust.patch
-Patch4:         vk.patch
+
+Patch2:         sust.patch
+Patch3:         vk.patch
 
 
 
