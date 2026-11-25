@@ -1,8 +1,135 @@
-From 8fe50e3267efd69815f5e2e936fca58fdded7b8c Mon Sep 17 00:00:00 2001
+From 4f47ef8e656df310502941b52da6d1bdf057086d Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Wed, 25 Nov 2026 20:35:35 +0100
+Subject: [PATCH 1/5] nvc0: create video buffers with modifiers
+
+GStreamer's VA plugin reads the modifier of an exported surface and then
+allocates its surfaces with that modifier. nvc0 has no
+create_video_buffer_with_modifiers, so the VA frontend refuses the
+attribute, and playback fails once video buffers can be exported.
+
+Video buffers have a fixed layout, so accept a modifier list that
+contains the modifier of every plane and fail otherwise.
+
+Generated-by: LLM
+---
+ .../drivers/nouveau/nvc0/nvc0_context.c       |  2 ++
+ .../drivers/nouveau/nvc0/nvc0_context.h       |  6 ++++
+ .../drivers/nouveau/nvc0/nvc0_miptree.c       |  2 +-
+ .../drivers/nouveau/nvc0/nvc0_resource.h      |  3 ++
+ src/gallium/drivers/nouveau/nvc0/nvc0_video.c | 35 +++++++++++++++++++
+ 5 files changed, 47 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_context.c b/src/gallium/drivers/nouveau/nvc0/nvc0_context.c
+index 31a33b46ab11..8ab290dd43ca 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_context.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_context.c
+@@ -477,6 +477,8 @@ nvc0_create(struct pipe_screen *pscreen, void *priv, unsigned ctxflags)
+ 
+    pipe->create_video_codec = nvc0_create_decoder;
+    pipe->create_video_buffer = nvc0_video_buffer_create;
++   pipe->create_video_buffer_with_modifiers =
++      nvc0_video_buffer_create_with_modifiers;
+ 
+    /* shader builtin library is per-screen, but we need a context for m2mf */
+    nvc0_program_library_upload(nvc0);
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_context.h b/src/gallium/drivers/nouveau/nvc0/nvc0_context.h
+index 3c0f4ba28efe..7d5a5fc818b1 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_context.h
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_context.h
+@@ -460,6 +460,12 @@ struct pipe_video_buffer *
+ nvc0_video_buffer_create(struct pipe_context *pipe,
+                          const struct pipe_video_buffer *templat);
+ 
++struct pipe_video_buffer *
++nvc0_video_buffer_create_with_modifiers(struct pipe_context *pipe,
++                                        const struct pipe_video_buffer *templat,
++                                        const uint64_t *modifiers,
++                                        unsigned int modifiers_count);
++
+ /* nvc0_push.c */
+ void nvc0_push_vbo(struct nvc0_context *, const struct pipe_draw_info *,
+                    const struct pipe_draw_indirect_info *indirect,
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c b/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
+index 26c1df0222b8..7bdb45bbed56 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
+@@ -309,7 +309,7 @@ nvc0_miptree_init_layout_tiled(struct nv50_miptree *mt, uint64_t modifier)
+    }
+ }
+ 
+-static uint64_t
++uint64_t
+ nvc0_miptree_get_modifier(struct pipe_screen *pscreen, struct nv50_miptree *mt)
+ {
+    const union nouveau_bo_config *config = &mt->base.bo->config;
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.h b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.h
+index 247c3aafc26b..64b02f9f8082 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.h
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.h
+@@ -53,6 +53,9 @@ nvc0_miptree_create(struct pipe_screen *pscreen,
+                     const struct pipe_resource *tmp,
+                     const uint64_t *modifiers, unsigned int count);
+ 
++uint64_t
++nvc0_miptree_get_modifier(struct pipe_screen *pscreen, struct nv50_miptree *mt);
++
+ bool
+ nvc0_miptree_get_handle(struct pipe_screen *pscreen,
+                         struct pipe_context *context,
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
+index 9df9c33243c6..920e204df42d 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
+@@ -354,3 +354,38 @@ nvc0_video_buffer_create(struct pipe_context *pipe,
+    return nouveau_vp3_video_buffer_create(
+          pipe, templat, NVC0_RESOURCE_FLAG_VIDEO);
+ }
++
++/* Video buffers have a fixed layout, so this only accepts a modifier list
++ * that contains the modifier of every plane.
++ */
++struct pipe_video_buffer *
++nvc0_video_buffer_create_with_modifiers(struct pipe_context *pipe,
++                                        const struct pipe_video_buffer *templat,
++                                        const uint64_t *modifiers,
++                                        unsigned int modifiers_count)
++{
++   struct pipe_resource *resources[VL_NUM_COMPONENTS] = { NULL };
++   struct pipe_video_buffer *buffer;
++
++   buffer = nvc0_video_buffer_create(pipe, templat);
++   if (!buffer)
++      return NULL;
++
++   buffer->get_resources(buffer, resources);
++   for (unsigned i = 0; i < VL_NUM_COMPONENTS && resources[i]; ++i) {
++      uint64_t modifier =
++         nvc0_miptree_get_modifier(pipe->screen, nv50_miptree(resources[i]));
++      unsigned j;
++
++      for (j = 0; j < modifiers_count; ++j) {
++         if (modifiers[j] == modifier)
++            break;
++      }
++      if (j == modifiers_count) {
++         buffer->destroy(buffer);
++         return NULL;
++      }
++   }
++
++   return buffer;
++}
+-- 
+GitLab
+
+
+From f46200fbfc14d91ae70f9e809f281c5dc45d7064 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 14:43:13 +0100
-Subject: [PATCH 1/4] nouveau: give vp3 decoders progressive video buffers
+Subject: [PATCH 2/5] nouveau: give vp3 decoders progressive video buffers
 
 VP3 to VP5 only had interlaced video buffers, which the VA frontend can
 neither export nor derive images from, so players fall back to software
@@ -145,11 +272,11 @@ index 8a5295dfb19b..8c92b282a9b5 100644
 GitLab
 
 
-From ea324a05681ef08b976870a2ff4b5c8d67088772 Mon Sep 17 00:00:00 2001
+From cb2940228a021faf3a7a11e5336056459b583544 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 14:45:43 +0100
-Subject: [PATCH 2/4] nouveau: give vp2 decoders progressive video buffers
+Subject: [PATCH 3/5] nouveau: give vp2 decoders progressive video buffers
 
 VP2 only had interlaced video buffers, which the VA frontend can neither
 export nor derive images from.
@@ -601,11 +728,11 @@ index 1e1506e75d8f..1cd49ca89395 100644
 GitLab
 
 
-From 71dd2b9dca27848049f77e7c8e034db85a7835a6 Mon Sep 17 00:00:00 2001
+From ed37698dfc0ea1ddcfcdacaa746247dcb7cc12ff Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 12:10:48 +0100
-Subject: [PATCH 3/4] frontends/va: drop interlaced surfaces
+Subject: [PATCH 4/5] frontends/va: drop interlaced surfaces
 
 Every driver now gives progressive video buffers, so the frontend no
 longer asks for interlaced surfaces, and the code that refused to export
@@ -785,11 +912,11 @@ index 34a3fc821e62..63cba36da9e7 100644
 GitLab
 
 
-From 4376ba0aa34c5eb34c2441609a959b10a2dd5e00 Mon Sep 17 00:00:00 2001
+From 764f26c4a33153c5a451b00fd1a0c840cd84c611 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 12:12:14 +0100
-Subject: [PATCH 4/4] gallium: remove PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE
+Subject: [PATCH 5/5] gallium: remove PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE
 
 Nothing queries it since the VA frontend stopped asking for interlaced
 surfaces, and every driver returned true except nouveau, which now

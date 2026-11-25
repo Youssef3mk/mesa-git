@@ -48,7 +48,7 @@
 
 Name:           mesa
 Summary:        Mesa graphics libraries (Custom build: i915, nvk, rusticl, nouveau, va)
-Version:        28.11
+Version:        28.12
 Release:        0.26112.git%{shortcommit}%{?dist}
 
 License:        MIT AND BSD-3-Clause AND SGI-B-2.0
@@ -57,7 +57,6 @@ URL:            http://www.mesa3d.org
 Source0:        https://gitlab.freedesktop.org/mesa/mesa/-/archive/%{commit}.tar.gz#/mesa-%{commit}.tar.gz
 Patch0:         video.patch
 Patch1:         va.patch
-
 Patch2:         sust.patch
 Patch3:         vk.patch
 
