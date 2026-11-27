@@ -1,8 +1,8 @@
-From 1e7b9c0112eeaa317ab97b39645383b2a57aaf43 Mon Sep 17 00:00:00 2001
+From 1fcec6d3eabe0c088415e02ff8cee794f1cf0ad6 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:24 +0200
-Subject: [PATCH 1/6] nouveau: keep H.264 references in the same VP slot
+Subject: [PATCH 1/8] nouveau: keep H.264 references in the same VP slot
 
 VP3 to VP5 identify reference pictures by their slot (fifo_idx), and the
 motion vectors stored with each picture refer to those slots. ffmpeg
@@ -15,6 +15,7 @@ in free slots.
 
 Cc: mesa-stable
 Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
 Generated-by: LLM
 ---
  .../drivers/nouveau/nouveau_vp3_video.h       |  2 ++
@@ -96,11 +97,11 @@ index 4e5a46ce3bbd..00d521c49341 100644
 GitLab
 
 
-From 36f26a428f0d5023cb8fe0fe66a3b1a9bd4d6ccd Mon Sep 17 00:00:00 2001
+From 9e5239137916256806de33420890d894d535aa80 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Sat, 17 Oct 2026 21:34:25 +0200
-Subject: [PATCH 2/6] nouveau: wait for the video engines before destroying a
+Subject: [PATCH 2/8] nouveau: wait for the video engines before destroying a
  vp3 decoder
 
 Destroying a decoder while the engines are still busy leaves the channel
@@ -111,6 +112,7 @@ Wait for the engine buffers before tearing the decoder down.
 
 Cc: mesa-stable
 Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
 Generated-by: LLM
 ---
  .../drivers/nouveau/nouveau_vp3_video.c        | 18 ++++++++++++++++++
@@ -151,11 +153,11 @@ index 5130ed6d6386..7753f22764fa 100644
 GitLab
 
 
-From 261d03a78d3d8f4064d77bb6a95a47ab26b1f97c Mon Sep 17 00:00:00 2001
+From f31fd5c386a726cc1b051c1f878949291678393b Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Mon, 2 Nov 2026 13:37:31 +0100
-Subject: [PATCH 3/6] nvc0: accept tiled modifiers for planar YUV formats
+Subject: [PATCH 3/8] nvc0: accept tiled modifiers for planar YUV formats
 
 nvc0 derives the storage type of a modifier from the block size of the
 format, which planar YUV formats don't have, so it accepts only LINEAR
@@ -166,6 +168,7 @@ For planar formats, take the storage type of the first plane's format.
 
 Cc: mesa-stable
 Tested-by: Youssef Mahmoud <youssefma255681@gmail.com>
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
 Generated-by: LLM
 ---
  .../drivers/nouveau/nvc0/nvc0_resource.c      | 19 +++++++++++++++----
@@ -226,22 +229,26 @@ index 98339c09928f..ff2deca8f94c 100644
 GitLab
 
 
-From b48a704e4e4734154e1734353cf69124840c54d1 Mon Sep 17 00:00:00 2001
+From 81a79f24b00e676c1f51adcf8d0e1bfe706f8947 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 15:59:57 +0100
-Subject: [PATCH 4/6] nouveau: add a start code to vc1 simple and main pictures
+Subject: [PATCH 4/8] nouveau: add a start code to vc1 simple and main pictures
 
 VP3 to VP5's BSP expects a start code in front of each VC-1 picture. The
 VA frontend only adds one for Advanced profile, so Simple and Main
 pictures decode to garbage, and VP can hang on a later picture.
 
-Add the frame start code in front of Simple and Main pictures.
+Add the frame start code in front of Simple and Main pictures, and drop
+the assert against Simple in nouveau_vp3_fill_picparm_vc1_vp, which made
+debug builds abort on the first Simple picture.
 
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
 Generated-by: LLM
 ---
  src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c  |  1 -
+ 2 files changed, 12 insertions(+), 1 deletion(-)
 
 diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_bsp.c
 index a81090b575d3..92b8da42d231 100644
@@ -266,67 +273,241 @@ index a81090b575d3..92b8da42d231 100644
  }
  
  void
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 00d521c49341..8029aba3f6ef 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -371,7 +371,6 @@ nouveau_vp3_fill_picparm_vc1_vp(struct nouveau_vp3_decoder *dec,
+ {
+    struct vc1_picparm_vp *vc = (struct vc1_picparm_vp *)map;
+    unsigned ring;
+-   assert(dec->base.profile != PIPE_VIDEO_PROFILE_VC1_SIMPLE);
+    *is_ref = d->picture_type <= 1;
+ 
+    nouveau_vp3_ycbcr_offsets(dec, &vc->ofs[1], &vc->ofs[3], &vc->ofs[4]);
 -- 
 GitLab
 
 
-From 808914e6faf619e13d3d5bf3186db0cd641fb221 Mon Sep 17 00:00:00 2001
+From 3af5cb8a121dd8202710d8408fe5b364471bbcfd Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 15:59:58 +0100
-Subject: [PATCH 5/6] nouveau: refuse interlaced vc1 pictures on vp3 to vp5
+Subject: [PATCH 5/8] nouveau: pick the vc1 microcode for each picture type
 
-VP gets no field information for VC-1. It decodes the second field of a
-field-interlaced frame wrongly, and the frames after it too, without any
-error, and a stream mixing field pictures with interlaced frames hangs
-it.
+nouveau loads vuc-vc1-0 for every VC-1 picture. NVIDIA's driver loads
+vuc-vc1-1 for fields and vuc-vc1-2 for interlaced frames: with the
+progressive one, VP decodes the second field of a frame wrongly, and the
+frames after it too, and a stream mixing fields with interlaced frames
+hangs it.
 
-Refuse interlaced pictures, so that end_frame fails and the application
-can fall back to software decoding. The check for frame_coding_mode 3
-goes: the VA frontend passes field-interlaced pictures as 2.
+Load all three and pick one for each picture. Where this is untested
+(VP3 and VP5) or vuc-vc1-1 or 2 is missing, refuse interlaced pictures
+instead, so that end_frame fails and the application can fall back to
+software decoding.
 
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
 Generated-by: LLM
 ---
- .../drivers/nouveau/nouveau_vp3_video.h        | 16 ++++++++++++++++
- .../drivers/nouveau/nouveau_vp3_video_vp.c     |  2 --
- src/gallium/drivers/nouveau/nv50/nv98_video.c  | 18 +++++++++++++++++-
- src/gallium/drivers/nouveau/nvc0/nvc0_video.c  |  3 +++
- 4 files changed, 36 insertions(+), 3 deletions(-)
+ .../drivers/nouveau/nouveau_vp3_video.c       | 76 ++++++++++++++-----
+ .../drivers/nouveau/nouveau_vp3_video.h       | 41 ++++++++++
+ .../drivers/nouveau/nouveau_vp3_video_vp.c    |  2 -
+ src/gallium/drivers/nouveau/nv50/nv98_video.c | 23 +++++-
+ .../drivers/nouveau/nv50/nv98_video_vp.c      | 11 ++-
+ src/gallium/drivers/nouveau/nvc0/nvc0_video.c |  8 +-
+ .../drivers/nouveau/nvc0/nvc0_video_vp.c      | 11 ++-
+ 7 files changed, 143 insertions(+), 29 deletions(-)
 
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 7753f22764fa..4d193102c63a 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -301,31 +301,20 @@ static void vp4_getpath(enum pipe_video_profile profile, char *path)
+    }
+ }
+ 
+-int
+-nouveau_vp3_load_firmware(struct nouveau_vp3_decoder *dec,
+-                          enum pipe_video_profile profile,
+-                          unsigned chipset)
++static int
++vp3_read_firmware(const char *path, void *map, enum pipe_video_profile profile,
++                  unsigned *fw_sizes)
+ {
+    int fd;
+-   char path[PATH_MAX];
+    ssize_t r;
+    uint32_t *end, endval;
+-   struct nouveau_screen *screen = nouveau_screen(dec->base.context->screen);
+-
+-   if (chipset >= 0xa3 && chipset != 0xaa && chipset != 0xac)
+-      vp4_getpath(profile, path);
+-   else
+-      vp3_getpath(profile, path);
+-
+-   if (BO_MAP(screen, dec->fw_bo, NOUVEAU_BO_WR, dec->client))
+-      return 1;
+ 
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+       fprintf(stderr, "opening firmware file %s failed: %m\n", path);
+       return 1;
+    }
+-   r = read(fd, dec->fw_bo->map, 0x4000);
++   r = read(fd, map, 0x4000);
+    close(fd);
+ 
+    if (r < 0) {
+@@ -343,32 +332,79 @@ nouveau_vp3_load_firmware(struct nouveau_vp3_decoder *dec,
+       return 1;
+    }
+ 
+-   end = dec->fw_bo->map + r - 4;
++   end = map + r - 4;
+    endval = *end;
+    while (endval == *end)
+       end--;
+ 
+-   r = (intptr_t)end - (intptr_t)dec->fw_bo->map + 4;
++   r = (intptr_t)end - (intptr_t)map + 4;
+ 
+    switch (u_reduce_video_profile(profile)) {
+       case PIPE_VIDEO_FORMAT_MPEG12: {
+          assert((r & 0xff) == 0xe0);
+-         dec->fw_sizes = (0x2e0<<16) | (r - 0x2e0);
++         *fw_sizes = (0x2e0<<16) | (r - 0x2e0);
+          break;
+       }
+       case PIPE_VIDEO_FORMAT_VC1: {
+          assert((r & 0xff) == 0xac);
+-         dec->fw_sizes = (0x3ac<<16) | (r - 0x3ac);
++         *fw_sizes = (0x3ac<<16) | (r - 0x3ac);
+          break;
+       }
+       case PIPE_VIDEO_FORMAT_MPEG4_AVC: {
+          assert((r & 0xff) == 0x70);
+-         dec->fw_sizes = (0x370<<16) | (r - 0x370);
++         *fw_sizes = (0x370<<16) | (r - 0x370);
+          break;
+       }
+       default:
+          return 1;
+    }
++   return 0;
++}
++
++int
++nouveau_vp3_load_firmware(struct nouveau_vp3_decoder *dec,
++                          enum pipe_video_profile profile,
++                          unsigned chipset)
++{
++   char path[PATH_MAX];
++   bool vp4 = chipset >= 0xa3 && chipset != 0xaa && chipset != 0xac;
++   struct nouveau_screen *screen = nouveau_screen(dec->base.context->screen);
++
++   if (vp4)
++      vp4_getpath(profile, path);
++   else
++      vp3_getpath(profile, path);
++
++   if (BO_MAP(screen, dec->fw_bo, NOUVEAU_BO_WR, dec->client))
++      return 1;
++
++   if (vp3_read_firmware(path, dec->fw_bo->map, profile, &dec->fw_sizes))
++      return 1;
++
++   /* The microcode for interlaced pictures, see nouveau_vp3_vc1_fw_image().
++    * Only tested on GT21x and Fermi so far: on VP3, and unless both files
++    * are there, interlaced pictures are refused.
++    */
++   if (u_reduce_video_profile(profile) == PIPE_VIDEO_FORMAT_VC1) {
++      char paths[2][PATH_MAX];
++      struct stat s;
++      bool present = vp4 && chipset < 0xd0;
++
++      dec->vc1_fw_sizes[0] = dec->fw_sizes;
++      for (unsigned i = 0; i < 2; ++i) {
++         snprintf(paths[i], sizeof(paths[i]),
++                  vp4 ? "/lib/firmware/nouveau/vuc-vc1-%u" :
++                        "/lib/firmware/nouveau/vuc-vp3-vc1-%u", i + 1);
++         present = present && !stat(paths[i], &s);
++      }
++      for (unsigned i = 0; i < 2 && present; ++i)
++         present = !vp3_read_firmware(paths[i], (char *)dec->fw_bo->map +
++                                      (i + 1) * NOUVEAU_VP3_VC1_FW_STRIDE,
++                                      profile, &dec->vc1_fw_sizes[i + 1]);
++      if (!present)
++         dec->vc1_fw_sizes[1] = dec->vc1_fw_sizes[2] = 0;
++   }
++
+    munmap(dec->fw_bo->map, dec->fw_bo->size);
+    dec->fw_bo->map = NULL;
+    return 0;
 diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.h b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
-index 47c555ad87a3..6f1316be97ee 100644
+index 47c555ad87a3..2b8de643a1fd 100644
 --- a/src/gallium/drivers/nouveau/nouveau_vp3_video.h
 +++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.h
-@@ -120,8 +120,24 @@ struct nouveau_vp3_decoder {
+@@ -114,14 +114,55 @@ struct nouveau_vp3_decoder {
+    struct nouveau_vp3_video_buffer *h264_refs[16];
+    unsigned fence_seq, fw_sizes, last_frame_num, tmp_stride, ref_stride;
+ 
++   /* VC-1 has one VP microcode per picture type, vuc-vc1-0 to 2, loaded
++    * NOUVEAU_VP3_VC1_FW_STRIDE apart in fw_bo. 1 and 2 are 0 unless both
++    * were loaded.
++    */
++   unsigned vc1_fw_sizes[3];
++
+    unsigned bsp_idx, vp_idx, ppp_idx;
+ 
+    /* End of the bsp bo where new data should be appended between one begin/end
      * frame.
      */
     char *bsp_ptr;
 +
-+   /* The current picture was refused, see nouveau_vp3_vc1_interlaced() */
++   /* The current picture was refused, see nouveau_vp3_vc1_refused() */
 +   bool skip_picture;
  };
  
-+/* VP gets no field information for VC-1: it decodes the second field of a
-+ * field-interlaced frame wrongly, and interlaced frames can hang it.
-+ * Interlaced pictures (frame_coding_mode 1 or 2, as the VA frontend passes
-+ * them) are refused instead.
++#define NOUVEAU_VP3_VC1_FW_STRIDE 0x4000
++
++/* The VC-1 microcode for a picture, as NVIDIA's driver picks it:
++ * vuc-vc1-0 for progressive pictures, vuc-vc1-1 for fields, vuc-vc1-2 for
++ * interlaced frames. frame_coding_mode is 0 progressive, 1 interlaced
++ * frame, 2 field, as the VA frontend passes it.
++ */
++static inline unsigned
++nouveau_vp3_vc1_fw_image(const struct pipe_vc1_picture_desc *d)
++{
++   static const unsigned image[3] = { 0, 2, 1 };
++
++   return d->frame_coding_mode < 3 ? image[d->frame_coding_mode] : 0;
++}
++
++/* Interlaced VC-1 pictures need their own microcode. Without it (VP5 has no
++ * fw_bo, it isn't loaded where untested, or a file is missing) VP decodes
++ * them wrongly and can hang, so they are refused instead and the
++ * application can decode them in software.
 + */
 +static inline bool
-+nouveau_vp3_vc1_interlaced(struct nouveau_vp3_decoder *dec,
-+                           struct pipe_picture_desc *picture)
++nouveau_vp3_vc1_refused(struct nouveau_vp3_decoder *dec,
++                        struct pipe_picture_desc *picture)
 +{
++   struct pipe_vc1_picture_desc *d = (struct pipe_vc1_picture_desc *)picture;
++
 +   return u_reduce_video_profile(dec->base.profile) == PIPE_VIDEO_FORMAT_VC1 &&
-+          ((struct pipe_vc1_picture_desc *)picture)->frame_coding_mode != 0;
++          d->frame_coding_mode != 0 &&
++          (d->frame_coding_mode > 2 ||
++           !dec->vc1_fw_sizes[nouveau_vp3_vc1_fw_image(d)]);
 +}
 +
  struct comm {
     uint32_t bsp_cur_index; // 000
     uint32_t byte_ofs; // 004
 diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
-index 00d521c49341..fafce3f70d13 100644
+index 8029aba3f6ef..63264a79d052 100644
 --- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
 +++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
-@@ -423,8 +423,6 @@ void nouveau_vp3_vp_caps(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+@@ -422,8 +422,6 @@ void nouveau_vp3_vp_caps(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
     case PIPE_VIDEO_FORMAT_VC1: {
        *caps = nouveau_vp3_fill_picparm_vc1_vp(dec, desc.vc1, refs, is_ref, vp);
        nouveau_vp3_handle_references(dec, refs, dec->fence_seq, target);
@@ -336,7 +517,7 @@ index 00d521c49341..fafce3f70d13 100644
        dec->refs[target->valid_ref].decoded_bottom = 1;
        return;
 diff --git a/src/gallium/drivers/nouveau/nv50/nv98_video.c b/src/gallium/drivers/nouveau/nv50/nv98_video.c
-index 220143654adf..cf97f91761f4 100644
+index 220143654adf..d9a463161a1e 100644
 --- a/src/gallium/drivers/nouveau/nv50/nv98_video.c
 +++ b/src/gallium/drivers/nouveau/nv50/nv98_video.c
 @@ -37,13 +37,18 @@ nv98_decoder_decode_bitstream(struct pipe_video_codec *decoder,
@@ -351,7 +532,7 @@ index 220143654adf..cf97f91761f4 100644
     ASSERTED unsigned ret; /* used in debug checks */
     struct nouveau_vp3_video_buffer *refs[16] = {};
  
-+   dec->skip_picture = nouveau_vp3_vc1_interlaced(dec, picture);
++   dec->skip_picture = nouveau_vp3_vc1_refused(dec, picture);
 +   if (dec->skip_picture)
 +      return;
 +
@@ -384,29 +565,121 @@ index 220143654adf..cf97f91761f4 100644
  
     for (i = 0; i < NOUVEAU_VP3_VIDEO_QDEPTH && !ret; ++i)
        ret = nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM,
+@@ -216,7 +232,10 @@ nv98_create_decoder(struct pipe_context *context,
+    }
+ 
+    ret = nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM, 0,
+-                           0x4000, NULL, &dec->fw_bo);
++                           u_reduce_video_profile(templ->profile) ==
++                           PIPE_VIDEO_FORMAT_VC1 ?
++                           3 * NOUVEAU_VP3_VC1_FW_STRIDE : 0x4000,
++                           NULL, &dec->fw_bo);
+    if (ret)
+       goto fail;
+ 
+diff --git a/src/gallium/drivers/nouveau/nv50/nv98_video_vp.c b/src/gallium/drivers/nouveau/nv50/nv98_video_vp.c
+index 33f6f758a41c..7833a93ec577 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv98_video_vp.c
++++ b/src/gallium/drivers/nouveau/nv50/nv98_video_vp.c
+@@ -73,7 +73,7 @@ nv98_decoder_vp(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+ {
+    struct nouveau_pushbuf *push = dec->pushbuf[1];
+    uint32_t bsp_addr, comm_addr, inter_addr, ucode_addr, pic_addr[17], last_addr, null_addr;
+-   uint32_t slice_size, bucket_size, ring_size, i;
++   uint32_t slice_size, bucket_size, ring_size, i, fw_sizes;
+    enum pipe_video_format codec = u_reduce_video_profile(dec->base.profile);
+    struct nouveau_bo *bsp_bo = dec->bsp_bo[comm_seq % NOUVEAU_VP3_VIDEO_QDEPTH];
+    struct nouveau_bo *inter_bo = dec->inter_bo[comm_seq & 1];
+@@ -127,12 +127,19 @@ nv98_decoder_vp(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+       ucode_addr = dec->fw_bo->offset >> 8;
+    else
+       ucode_addr = 0;
++   fw_sizes = dec->fw_sizes;
++   if (codec == PIPE_VIDEO_FORMAT_VC1 && dec->fw_bo) {
++      unsigned image = nouveau_vp3_vc1_fw_image(desc.vc1);
++
++      ucode_addr = (dec->fw_bo->offset + image * NOUVEAU_VP3_VC1_FW_STRIDE) >> 8;
++      fw_sizes = dec->vc1_fw_sizes[image];
++   }
+ 
+    BEGIN_NV04(push, SUBC_VP(0x700), 7);
+    PUSH_DATA (push, caps); // 700
+    PUSH_DATA (push, comm_seq); // 704
+    PUSH_DATA (push, 0); // 708 fuc targets, ignored for nv98
+-   PUSH_DATA (push, dec->fw_sizes); // 70c
++   PUSH_DATA (push, fw_sizes); // 70c
+    PUSH_DATA (push, bsp_addr+(VP_OFFSET>>8)); // 710 picparm_addr
+    PUSH_DATA (push, inter_addr); // 714 inter_parm
+    PUSH_DATA (push, inter_addr + slice_size + bucket_size); // 718 inter_data_ofs
 diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
-index 9df9c33243c6..6b4594bfb7e2 100644
+index 9df9c33243c6..032dd49e36f3 100644
 --- a/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
 +++ b/src/gallium/drivers/nouveau/nvc0/nvc0_video.c
 @@ -76,6 +76,9 @@ nvc0_decoder_end_frame(struct pipe_video_codec *decoder,
     ASSERTED unsigned ret; /* used in debug checks */
     struct nouveau_vp3_video_buffer *refs[16] = {};
  
-+   if (nouveau_vp3_vc1_interlaced(dec, picture))
++   if (nouveau_vp3_vc1_refused(dec, picture))
 +      return -1;
 +
     desc.base = picture;
  
     ret = nvc0_decoder_bsp_end(dec, desc, target, comm_seq, &vp_caps, &is_ref, refs);
+@@ -240,7 +243,10 @@ nvc0_create_decoder(struct pipe_context *context,
+ 
+    if (screen->device->chipset < 0xd0) {
+       ret = nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM, 0,
+-                           0x4000, &cfg, &dec->fw_bo);
++                           u_reduce_video_profile(templ->profile) ==
++                           PIPE_VIDEO_FORMAT_VC1 ?
++                           3 * NOUVEAU_VP3_VC1_FW_STRIDE : 0x4000,
++                           &cfg, &dec->fw_bo);
+       if (ret)
+          goto fail;
+ 
+diff --git a/src/gallium/drivers/nouveau/nvc0/nvc0_video_vp.c b/src/gallium/drivers/nouveau/nvc0/nvc0_video_vp.c
+index 98dc1c937fcf..9634c065cc03 100644
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_video_vp.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_video_vp.c
+@@ -73,7 +73,7 @@ nvc0_decoder_vp(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+ {
+    struct nouveau_pushbuf *push = dec->pushbuf[1];
+    uint32_t bsp_addr, comm_addr, inter_addr, ucode_addr, pic_addr[17], last_addr, null_addr;
+-   uint32_t slice_size, bucket_size, ring_size, i;
++   uint32_t slice_size, bucket_size, ring_size, i, fw_sizes;
+    enum pipe_video_format codec = u_reduce_video_profile(dec->base.profile);
+    struct nouveau_bo *bsp_bo = dec->bsp_bo[comm_seq % NOUVEAU_VP3_VIDEO_QDEPTH];
+    struct nouveau_bo *inter_bo = dec->inter_bo[comm_seq & 1];
+@@ -127,12 +127,19 @@ nvc0_decoder_vp(struct nouveau_vp3_decoder *dec, union pipe_desc desc,
+       ucode_addr = dec->fw_bo->offset >> 8;
+    else
+       ucode_addr = 0;
++   fw_sizes = dec->fw_sizes;
++   if (codec == PIPE_VIDEO_FORMAT_VC1 && dec->fw_bo) {
++      unsigned image = nouveau_vp3_vc1_fw_image(desc.vc1);
++
++      ucode_addr = (dec->fw_bo->offset + image * NOUVEAU_VP3_VC1_FW_STRIDE) >> 8;
++      fw_sizes = dec->vc1_fw_sizes[image];
++   }
+ 
+    BEGIN_NVC0(push, SUBC_VP(0x700), 7);
+    PUSH_DATA (push, caps); // 700
+    PUSH_DATA (push, comm_seq); // 704
+    PUSH_DATA (push, 0); // 708 fuc targets, ignored for nvc0
+-   PUSH_DATA (push, dec->fw_sizes); // 70c
++   PUSH_DATA (push, fw_sizes); // 70c
+    PUSH_DATA (push, bsp_addr+(VP_OFFSET>>8)); // 710 picparm_addr
+    PUSH_DATA (push, inter_addr); // 714 inter_parm
+    PUSH_DATA (push, inter_addr + slice_size + bucket_size); // 718 inter_data_ofs
 -- 
 GitLab
 
 
-From 07b1615ba8dfc817b3ea6b8c3b0dee054131a148 Mon Sep 17 00:00:00 2001
+From 3e464d2da515aa5ad33ba503490b4dca8f826051 Mon Sep 17 00:00:00 2001
 From: Francesco Stimola
  <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
 Date: Wed, 25 Nov 2026 21:38:20 +0100
-Subject: [PATCH 6/6] nouveau: report the size of exported buffers
+Subject: [PATCH 6/8] nouveau: report the size of exported buffers
 
 nouveau_screen_bo_get_handle never set whandle->size, so
 vaExportSurfaceHandle gave every object a size of 0. GStreamer's VA
@@ -432,6 +705,95 @@ index b144b8977e7e..f483f255c24d 100644
  
     if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
        return nouveau_bo_name_get(bo, &whandle->handle) == 0;
+-- 
+GitLab
+
+
+From 1f2b23a0006e737c3873a30d1f57210c19094a7f Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Thu, 26 Nov 2026 10:09:24 +0100
+Subject: [PATCH 7/8] nouveau: don't advertise H.264 High 10, 4:2:2 and 4:4:4
+
+The VP2 to VP5 decoders only handle 8-bit 4:2:0 H.264: they take NV12
+surfaces only and never read the bit depth or chroma format. Both
+get_video_param functions still report every H.264 profile as supported,
+so the VA frontend lists VAProfileH264High10 and FFmpeg uses it for
+10-bit streams instead of decoding them in software.
+
+Only report H.264 profiles up to High.
+
+Generated-by: LLM
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video.c | 2 +-
+ src/gallium/drivers/nouveau/nv50/nv84_video.c   | 3 ++-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+index 4d193102c63a..aeabb8c5bb30 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -503,7 +503,7 @@ nouveau_vp3_screen_get_video_param(struct pipe_screen *pscreen,
+    case PIPE_VIDEO_CAP_SUPPORTED:
+       return entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM &&
+          profile >= PIPE_VIDEO_PROFILE_MPEG1 &&
+-         profile < PIPE_VIDEO_PROFILE_HEVC_MAIN &&
++         profile <= PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH &&
+          firmware_present(pscreen, profile);
+    case PIPE_VIDEO_CAP_MAX_WIDTH:
+       switch (codec) {
+diff --git a/src/gallium/drivers/nouveau/nv50/nv84_video.c b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+index 3b9cf51fc284..9dc53792724f 100644
+--- a/src/gallium/drivers/nouveau/nv50/nv84_video.c
++++ b/src/gallium/drivers/nouveau/nv50/nv84_video.c
+@@ -818,7 +818,8 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
+    switch (param) {
+    case PIPE_VIDEO_CAP_SUPPORTED:
+       codec = u_reduce_video_profile(profile);
+-      return (codec == PIPE_VIDEO_FORMAT_MPEG4_AVC ||
++      return ((codec == PIPE_VIDEO_FORMAT_MPEG4_AVC &&
++               profile <= PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH) ||
+               codec == PIPE_VIDEO_FORMAT_MPEG12) &&
+          firmware_present(pscreen, codec);
+    case PIPE_VIDEO_CAP_MAX_WIDTH:
+-- 
+GitLab
+
+
+From 2d388360a9d64dfd8bc96d0d8c9a32f7faeecdb8 Mon Sep 17 00:00:00 2001
+From: Francesco Stimola
+ <1268108-francesco-stimola@users.noreply.gitlab.freedesktop.org>
+Date: Fri, 27 Nov 2026 18:51:12 +0100
+Subject: [PATCH 8/8] nouveau: give the vc1 vp the picture height
+
+The VC-1 VP parameters take the macroblock-aligned height, while NVIDIA's
+driver passes the picture height there, 1080 for a 1920x1080 stream. When
+the height is not a multiple of 16, motion vectors pointing below the
+picture then read the decoded rows of the last macroblock row instead of
+the repeated bottom edge, and the error spreads through the following
+frames.
+
+Pass the picture height.
+
+Tested-by: MrNoname3 <1271030-MrNonam3@users.noreply.gitlab.freedesktop.org>
+Generated-by: LLM
+---
+ src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+index 63264a79d052..fc70b4f47f38 100644
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -377,7 +377,7 @@ nouveau_vp3_fill_picparm_vc1_vp(struct nouveau_vp3_decoder *dec,
+    vc->ofs[5] = vc->ofs[3];
+    vc->ofs[0] = vc->ofs[2] = 0;
+    vc->width = dec->base.width;
+-   vc->height = mb(dec->base.height)<<4;
++   vc->height = dec->base.height;
+    vc->unk0c = vc->unk10 = mb(dec->base.width)<<4; // Stride
+    vc->pad = vc->pad2 = 0;
+    nouveau_vp3_inter_sizes(dec, 1, &ring, &vc->bucket_size, &vc->inter_ring_data_size);
 -- 
 GitLab
 
